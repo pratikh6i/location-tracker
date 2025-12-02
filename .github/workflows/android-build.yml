@@ -12,7 +12,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Setup Node.js
+      - name: Setup Node.js (Version 20)
         uses: actions/setup-node@v3
         with:
           node-version: '20'
@@ -25,8 +25,9 @@ jobs:
       - name: Build Web Assets
         run: npm run build
 
-      - name: Sync Android Project
-        run: npx cap sync android
+      - name: Add Android Platform
+        # This command creates the Android project from scratch
+        run: npx cap add android
 
       - name: Setup Java
         uses: actions/setup-java@v3
