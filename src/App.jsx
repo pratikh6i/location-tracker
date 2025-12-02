@@ -111,22 +111,22 @@ export default function App() {
     if (queue.length === 0) return alert("Nothing to sync!");
     if (!isOnline) return alert("No Internet Connection!");
 
-    log('SYNC', \`Attempting to sync \${queue.length} items...\`);
+    log('SYNC', `Attempting to sync ${queue.length} items...`);
     // In a real app, this goes to Firestore.
     // For now, we simulate success to clear queue.
     try {
-        // Batch upload or single upload depending on preference. 
-        // Here we upload each item. In production, use a batch write.
-        const promises = queue.map(item => addDoc(collection(db, 'logs'), item));
-        await Promise.all(promises);
-        
-        log('SYNC', 'Upload successful');
-        setQueue([]);
-        localStorage.removeItem('offline_queue');
-        alert("Sync Complete!");
+      // Batch upload or single upload depending on preference. 
+      // Here we upload each item. In production, use a batch write.
+      const promises = queue.map(item => addDoc(collection(db, 'logs'), item));
+      await Promise.all(promises);
+
+      log('SYNC', 'Upload successful');
+      setQueue([]);
+      localStorage.removeItem('offline_queue');
+      alert("Sync Complete!");
     } catch (e) {
-        log('SYNC_ERR', e.message);
-        alert("Sync Failed: " + e.message);
+      log('SYNC_ERR', e.message);
+      alert("Sync Failed: " + e.message);
     }
   };
 
@@ -148,10 +148,10 @@ export default function App() {
       </div>
       <h1 className="text-2xl font-bold text-slate-800 mb-2">Location Keeper</h1>
       <p className="text-slate-500 mb-8 max-w-xs">
-        Securely track your device location. 
+        Securely track your device location.
       </p>
       <button onClick={handleStart} className="w-full py-4 bg-blue-600 text-white rounded-xl font-medium shadow-lg shadow-blue-200 active:scale-95 transition-transform flex items-center justify-center gap-2">
-           <Shield size={20} /> Grant Permissions & Start
+        <Shield size={20} /> Grant Permissions & Start
       </button>
     </div>
   );
@@ -163,7 +163,7 @@ export default function App() {
         <div className="font-bold text-lg flex items-center gap-2">
           <Activity className="text-blue-600" /> Dashboard
         </div>
-        <div className={`text - xs font - bold px - 2 py - 1 rounded ${ isOnline? 'bg-green-100 text-green-700': 'bg-red-100 text-red-700' }`}>
+        <div className={`text - xs font - bold px - 2 py - 1 rounded ${isOnline ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
           {isOnline ? 'ONLINE' : 'OFFLINE'}
         </div>
       </div>
@@ -180,24 +180,24 @@ export default function App() {
         </div>
 
         <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
-           <div className="flex justify-between items-center mb-4">
-              <div className="text-sm font-bold text-slate-700">Data Queue</div>
-              <div className="bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-xs font-bold">
-                {queue.length} Items
-              </div>
-           </div>
-           <button onClick={handleSync} disabled={queue.length === 0} className="w-full py-3 bg-slate-800 text-white rounded-xl font-medium flex items-center justify-center gap-2 disabled:opacity-50">
-             <Cloud size={18} /> Sync to Cloud
-           </button>
+          <div className="flex justify-between items-center mb-4">
+            <div className="text-sm font-bold text-slate-700">Data Queue</div>
+            <div className="bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-xs font-bold">
+              {queue.length} Items
+            </div>
+          </div>
+          <button onClick={handleSync} disabled={queue.length === 0} className="w-full py-3 bg-slate-800 text-white rounded-xl font-medium flex items-center justify-center gap-2 disabled:opacity-50">
+            <Cloud size={18} /> Sync to Cloud
+          </button>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
-           <button onClick={exportLogs} className="py-3 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-600 flex flex-col items-center justify-center gap-1">
-              <FileText size={16} /> Export Logs
-           </button>
-           <a href={`sms:?body = My Location: ${ location?.lat }, ${ location?.lng }`} className="py-3 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-600 flex flex-col items-center justify-center gap-1">
-              <Smartphone size={16} /> SMS Location
-           </a>
+          <button onClick={exportLogs} className="py-3 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-600 flex flex-col items-center justify-center gap-1">
+            <FileText size={16} /> Export Logs
+          </button>
+          <a href={`sms:?body = My Location: ${location?.lat}, ${location?.lng}`} className="py-3 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-600 flex flex-col items-center justify-center gap-1">
+            <Smartphone size={16} /> SMS Location
+          </a>
         </div>
       </div>
     </div>
