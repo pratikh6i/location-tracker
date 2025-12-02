@@ -7,35 +7,43 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout Code
         uses: actions/checkout@v4
+
       - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+
       - name: Install Dependencies
         run: |
           npm install
           npm install @capacitor/android
+
       - name: Build Web Assets
         run: npm run build
-      - name: Re-Add Android Platform
-        # This forces a clean slate for the Android project
+
+      - name: Reset Android Platform
+        # Wipes the android folder to ensure a clean build every time
         run: |
           rm -rf android
           npx cap add android
+
       - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '21'
+
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
-      - name: Build APK
+
+      - name: Build APK with Gradle
         run: |
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:

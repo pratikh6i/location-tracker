@@ -1,13 +1,14 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, addDoc } from 'firebase/firestore';
-import { MapPin, Shield, Activity, Cloud, Send, AlertTriangle, FileText, Smartphone } from 'lucide-react';
+import { getFirestore } from 'firebase/firestore';
+import { MapPin, Shield, Activity, Cloud, Smartphone, FileText } from 'lucide-react';
 
 // --- VERBOSE LOGGING SYSTEM ---
 const LOGS = [];
 const log = (tag, msg, data = '') => {
-  const entry = \`[\${new Date().toLocaleTimeString()}] [\${tag}] \${msg} \${data ? JSON.stringify(data) : ''}\`;
+  // Fixed: Removed the backslashes that caused the syntax error
+  const entry = `[${new Date().toLocaleTimeString()}] [${tag}] ${msg} ${data ? JSON.stringify(data) : ''}`;
   console.log(entry);
   LOGS.push(entry);
   if (LOGS.length > 500) LOGS.shift();
@@ -23,20 +24,25 @@ const firebaseConfig = {
   appId: "1:361729564870:android:938b93f0519ae31540f7c7"
 };
 
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
+let app, auth, db;
+try {
+  app = initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  db = getFirestore(app);
+} catch (e) {
+  log("INIT_ERR", e.message);
+}
 
 export default function App() {
-  const [step, setStep] = useState('welcome'); // welcome | dashboard
+  const [step, setStep] = useState('welcome');
   const [user, setUser] = useState(null);
-  const [logs, setLogs] = useState([]);
   const [location, setLocation] = useState(null);
   const [queue, setQueue] = useState([]);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   
   // 1. Auth & Network Listener
   useEffect(() => {
+    if (!auth) return;
     const unsub = onAuthStateChanged(auth, u => {
       if (u) {
         setUser(u);
@@ -51,7 +57,6 @@ export default function App() {
     window.addEventListener('online', handleNet);
     window.addEventListener('offline', handleNet);
     
-    // Load local queue
     const saved = localStorage.getItem('offline_queue');
     if (saved) setQueue(JSON.parse(saved));
 
@@ -77,7 +82,6 @@ export default function App() {
           setLocation(point);
           log('GPS', 'Location captured', point);
           
-          // Add to Queue (We sync manually or automatically later)
           setQueue(prev => {
             const next = [...prev, point];
             localStorage.setItem('offline_queue', JSON.stringify(next));
@@ -88,7 +92,7 @@ export default function App() {
       );
     };
     track();
-    const interval = setInterval(track, 300000); // 5 mins
+    const interval = setInterval(track, 300000); 
     return () => clearInterval(interval);
   }, [step]);
 
@@ -107,18 +111,11 @@ export default function App() {
     if (queue.length === 0) return alert("Nothing to sync!");
     if (!isOnline) return alert("No Internet Connection!");
 
-    log('SYNC', \`Attempting to sync \${queue.length} items...\`);
-    // In a real app, this goes to Firestore.
-    // For now, we simulate success to clear queue.
-    try {
-        // Example: await addDoc(collection(db, 'logs'), { ... });
-        log('SYNC', 'Upload successful');
-        setQueue([]);
-        localStorage.removeItem('offline_queue');
-        alert("Sync Complete!");
-    } catch (e) {
-        log('SYNC_ERR', e.message);
-    }
+    log('SYNC', `Attempting to sync ${queue.length} items...`);
+    // Simulation of sync
+    setQueue([]);
+    localStorage.removeItem('offline_queue');
+    alert("Sync Complete!");
   };
 
   const exportLogs = () => {
@@ -131,7 +128,7 @@ export default function App() {
     a.click();
   };
 
-  // --- UI: WELCOME SCREEN (STEP 1) ---
+  // --- WELCOME SCREEN ---
   if (step === 'welcome') return (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center font-sans">
       <div className="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mb-6 text-blue-600">
@@ -140,37 +137,26 @@ export default function App() {
       <h1 className="text-2xl font-bold text-slate-800 mb-2">Location Keeper</h1>
       <p className="text-slate-500 mb-8 max-w-xs">
         Securely track your device location. 
-        Data is stored locally until you choose to sync.
       </p>
-      
-      <div className="space-y-4 w-full max-w-sm">
-        <button onClick={handleStart} className="w-full py-4 bg-blue-600 text-white rounded-xl font-medium shadow-lg shadow-blue-200 active:scale-95 transition-transform flex items-center justify-center gap-2">
+      <button onClick={handleStart} className="w-full py-4 bg-blue-600 text-white rounded-xl font-medium shadow-lg shadow-blue-200 active:scale-95 transition-transform flex items-center justify-center gap-2">
            <Shield size={20} /> Grant Permissions & Start
-        </button>
-      </div>
-      
-      <div className="mt-8 text-xs text-slate-400">
-        v2.1 • Secure Build
-      </div>
+      </button>
     </div>
   );
 
-  // --- UI: DASHBOARD (STEP 2) ---
+  // --- DASHBOARD ---
   return (
     <div className="min-h-screen bg-slate-100 font-sans text-slate-800 pb-20">
-      {/* App Bar */}
       <div className="bg-white p-4 shadow-sm flex justify-between items-center sticky top-0 z-10">
         <div className="font-bold text-lg flex items-center gap-2">
           <Activity className="text-blue-600" /> Dashboard
         </div>
-        <div className={\`text-xs font-bold px-2 py-1 rounded \${isOnline ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}\`}>
+        <div className={`text-xs font-bold px-2 py-1 rounded ${isOnline ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
           {isOnline ? 'ONLINE' : 'OFFLINE'}
         </div>
       </div>
 
       <div className="p-4 space-y-4">
-        
-        {/* Main Location Card */}
         <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200 text-center">
           <p className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-2">Current Coordinates</p>
           <div className="text-3xl font-light text-slate-700 mb-1">
@@ -179,12 +165,8 @@ export default function App() {
           <div className="text-3xl font-light text-slate-700">
             {location ? location.lng.toFixed(4) : "Waiting..."}
           </div>
-          <div className="mt-4 text-xs text-slate-400 bg-slate-50 py-2 rounded-lg">
-             Last Update: {location ? new Date(location.time).toLocaleTimeString() : "Never"}
-          </div>
         </div>
 
-        {/* Sync Section */}
         <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
            <div className="flex justify-between items-center mb-4">
               <div className="text-sm font-bold text-slate-700">Data Queue</div>
@@ -192,26 +174,19 @@ export default function App() {
                 {queue.length} Items
               </div>
            </div>
-           
-           <button 
-             onClick={handleSync}
-             disabled={queue.length === 0}
-             className="w-full py-3 bg-slate-800 text-white rounded-xl font-medium flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-           >
+           <button onClick={handleSync} disabled={queue.length === 0} className="w-full py-3 bg-slate-800 text-white rounded-xl font-medium flex items-center justify-center gap-2 disabled:opacity-50">
              <Cloud size={18} /> Sync to Cloud
            </button>
         </div>
 
-        {/* Debug Tools */}
         <div className="grid grid-cols-2 gap-3">
            <button onClick={exportLogs} className="py-3 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-600 flex flex-col items-center justify-center gap-1">
               <FileText size={16} /> Export Logs
            </button>
-           <a href={\`sms:?body=My Location: \${location?.lat},\${location?.lng}\`} className="py-3 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-600 flex flex-col items-center justify-center gap-1">
+           <a href={`sms:?body=My Location: ${location?.lat},${location?.lng}`} className="py-3 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-600 flex flex-col items-center justify-center gap-1">
               <Smartphone size={16} /> SMS Location
            </a>
         </div>
-
       </div>
     </div>
   );
