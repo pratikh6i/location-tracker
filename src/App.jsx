@@ -16,12 +16,12 @@ const log = (tag, msg, data = '') => {
 
 // --- REAL KEYS FROM YOUR UPLOAD ---
 const firebaseConfig = {
-  apiKey: "AIzaSyBTnNBYbXE3k2YXcOI-7Mbf6-eT0K5rSog",
-  authDomain: "android-location-tracker-4fe65.firebaseapp.com",
-  projectId: "android-location-tracker-4fe65",
-  storageBucket: "android-location-tracker-4fe65.firebasestorage.app",
-  messagingSenderId: "361729564870",
-  appId: "1:361729564870:android:938b93f0519ae31540f7c7"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
 let app, auth, db;
@@ -39,7 +39,7 @@ export default function App() {
   const [location, setLocation] = useState(null);
   const [queue, setQueue] = useState([]);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
-  
+
   // 1. Auth & Network Listener
   useEffect(() => {
     if (!auth) return;
@@ -49,14 +49,14 @@ export default function App() {
         log('AUTH', 'User signed in', u.uid);
       }
     });
-    
+
     const handleNet = () => {
       setIsOnline(navigator.onLine);
       log('NET', 'Status changed', navigator.onLine ? 'Online' : 'Offline');
     };
     window.addEventListener('online', handleNet);
     window.addEventListener('offline', handleNet);
-    
+
     const saved = localStorage.getItem('offline_queue');
     if (saved) setQueue(JSON.parse(saved));
 
@@ -70,7 +70,7 @@ export default function App() {
     log('GPS', 'Starting tracking loop (5 min interval)');
     const track = () => {
       if (!navigator.geolocation) return log('GPS', 'Not supported');
-      
+
       navigator.geolocation.getCurrentPosition(
         pos => {
           const point = {
@@ -81,7 +81,7 @@ export default function App() {
           };
           setLocation(point);
           log('GPS', 'Location captured', point);
-          
+
           setQueue(prev => {
             const next = [...prev, point];
             localStorage.setItem('offline_queue', JSON.stringify(next));
@@ -92,7 +92,7 @@ export default function App() {
       );
     };
     track();
-    const interval = setInterval(track, 300000); 
+    const interval = setInterval(track, 300000);
     return () => clearInterval(interval);
   }, [step]);
 
@@ -111,11 +111,23 @@ export default function App() {
     if (queue.length === 0) return alert("Nothing to sync!");
     if (!isOnline) return alert("No Internet Connection!");
 
-    log('SYNC', `Attempting to sync ${queue.length} items...`);
-    // Simulation of sync
-    setQueue([]);
-    localStorage.removeItem('offline_queue');
-    alert("Sync Complete!");
+    log('SYNC', \`Attempting to sync \${queue.length} items...\`);
+    // In a real app, this goes to Firestore.
+    // For now, we simulate success to clear queue.
+    try {
+        // Batch upload or single upload depending on preference. 
+        // Here we upload each item. In production, use a batch write.
+        const promises = queue.map(item => addDoc(collection(db, 'logs'), item));
+        await Promise.all(promises);
+        
+        log('SYNC', 'Upload successful');
+        setQueue([]);
+        localStorage.removeItem('offline_queue');
+        alert("Sync Complete!");
+    } catch (e) {
+        log('SYNC_ERR', e.message);
+        alert("Sync Failed: " + e.message);
+    }
   };
 
   const exportLogs = () => {
@@ -151,7 +163,7 @@ export default function App() {
         <div className="font-bold text-lg flex items-center gap-2">
           <Activity className="text-blue-600" /> Dashboard
         </div>
-        <div className={`text-xs font-bold px-2 py-1 rounded ${isOnline ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+        <div className={`text - xs font - bold px - 2 py - 1 rounded ${ isOnline? 'bg-green-100 text-green-700': 'bg-red-100 text-red-700' }`}>
           {isOnline ? 'ONLINE' : 'OFFLINE'}
         </div>
       </div>
@@ -183,7 +195,7 @@ export default function App() {
            <button onClick={exportLogs} className="py-3 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-600 flex flex-col items-center justify-center gap-1">
               <FileText size={16} /> Export Logs
            </button>
-           <a href={`sms:?body=My Location: ${location?.lat},${location?.lng}`} className="py-3 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-600 flex flex-col items-center justify-center gap-1">
+           <a href={`sms:?body = My Location: ${ location?.lat }, ${ location?.lng }`} className="py-3 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-600 flex flex-col items-center justify-center gap-1">
               <Smartphone size={16} /> SMS Location
            </a>
         </div>
