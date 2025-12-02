@@ -2,19 +2,16 @@ import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, addDoc } from 'firebase/firestore';
-import { MapPin, Shield, Activity, Cloud, Smartphone, FileText, Zap, Navigation, Radio } from 'lucide-react';
+import { MapPin, Activity, Cloud, Trash2, RefreshCw, Play, Square } from 'lucide-react';
 
-// --- CONFIGURATION ---
-// Fallback to hardcoded values if env vars fail (Critical for build reliability)
-const getEnv = (key, fallback) => import.meta.env[key] || fallback;
-
+// --- CONFIGURATION (HARDCODED FOR RELIABILITY) ---
 const firebaseConfig = {
-  apiKey: getEnv('VITE_FIREBASE_API_KEY', "AIzaSyBTnNBYbXE3k2YXcOI-7Mbf6-eT0K5rSog"),
-  authDomain: getEnv('VITE_FIREBASE_AUTH_DOMAIN', "android-location-tracker-4fe65.firebaseapp.com"),
-  projectId: getEnv('VITE_FIREBASE_PROJECT_ID', "android-location-tracker-4fe65"),
-  storageBucket: getEnv('VITE_FIREBASE_STORAGE_BUCKET', "android-location-tracker-4fe65.firebasestorage.app"),
-  messagingSenderId: getEnv('VITE_FIREBASE_MESSAGING_SENDER_ID', "361729564870"),
-  appId: getEnv('VITE_FIREBASE_APP_ID', "1:361729564870:android:938b93f0519ae31540f7c7")
+  apiKey: "AIzaSyBTnNBYbXE3k2YXcOI-7Mbf6-eT0K5rSog",
+  authDomain: "android-location-tracker-4fe65.firebaseapp.com",
+  projectId: "android-location-tracker-4fe65",
+  storageBucket: "android-location-tracker-4fe65.firebasestorage.app",
+  messagingSenderId: "361729564870",
+  appId: "1:361729564870:android:938b93f0519ae31540f7c7"
 };
 
 // --- LOGGING ---
@@ -29,25 +26,25 @@ const log = (tag, msg, data = '') => {
 // --- FIREBASE INIT ---
 let app, auth, db;
 try {
-  if (!firebaseConfig.apiKey) throw new Error("Missing API Key");
   app = initializeApp(firebaseConfig);
   auth = getAuth(app);
   db = getFirestore(app);
-  log("INIT", "Firebase initialized successfully");
+  log("INIT", "Firebase initialized");
 } catch (e) {
+  console.error("Firebase Init Error:", e);
   log("INIT_ERR", e.message);
-  console.error("Firebase Init Failed:", e);
 }
 
 export default function App() {
   const [step, setStep] = useState('welcome');
   const [user, setUser] = useState(null);
   const [location, setLocation] = useState(null);
-  const [queue, setQueue] = useState([]);
+  const [queue, setQueue] = useState([]); // Pending upload
+  const [history, setHistory] = useState([]); // Local history for table
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isTracking, setIsTracking] = useState(false);
 
-  // 1. Auth & Network Listener
+  // 1. Auth & Network
   useEffect(() => {
     if (!auth) return;
     const unsub = onAuthStateChanged(auth, u => {
@@ -64,213 +61,204 @@ export default function App() {
     window.addEventListener('online', handleNet);
     window.addEventListener('offline', handleNet);
 
-    const saved = localStorage.getItem('offline_queue');
-    if (saved) setQueue(JSON.parse(saved));
+    // Load data
+    const savedQueue = localStorage.getItem('offline_queue');
+    if (savedQueue) setQueue(JSON.parse(savedQueue));
+
+    const savedHistory = localStorage.getItem('loc_history');
+    if (savedHistory) setHistory(JSON.parse(savedHistory));
 
     return () => { unsub(); window.removeEventListener('online', handleNet); window.removeEventListener('offline', handleNet); };
   }, []);
 
-  // 2. Start Tracking
+  // 2. Tracking Logic
   useEffect(() => {
-    if (step !== 'dashboard') return;
+    if (!isTracking) return;
 
-    log('GPS', 'Starting tracking loop');
-    setIsTracking(true);
+    log('GPS', 'Tracking active');
 
     const track = () => {
       if (!navigator.geolocation) return log('GPS', 'Not supported');
 
       navigator.geolocation.getCurrentPosition(
         pos => {
+          const now = new Date();
           const point = {
             lat: pos.coords.latitude,
             lng: pos.coords.longitude,
             acc: pos.coords.accuracy,
-            time: new Date().toISOString()
+            time: now.toISOString(),
+            displayTime: now.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) // IST
           };
-          setLocation(point);
-          log('GPS', 'Location captured', point);
 
+          setLocation(point);
+          log('GPS', 'Captured', point);
+
+          // Add to Queue (for Sync)
           setQueue(prev => {
             const next = [...prev, point];
             localStorage.setItem('offline_queue', JSON.stringify(next));
             return next;
           });
+
+          // Add to History (for Table)
+          setHistory(prev => {
+            const next = [point, ...prev].slice(0, 50); // Keep last 50
+            localStorage.setItem('loc_history', JSON.stringify(next));
+            return next;
+          });
         },
         err => log('GPS_ERR', err.message),
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
       );
     };
 
-    // Initial track
-    track();
-    // Interval track (5 mins)
-    const interval = setInterval(track, 300000);
+    track(); // Immediate
+    const interval = setInterval(track, 300000); // 5 mins
     return () => clearInterval(interval);
-  }, [step]);
+  }, [isTracking]);
 
   const handleStart = async () => {
-    if (!auth) return alert("Firebase not initialized. Check logs.");
-    log('USER', 'Clicked Start Setup');
     try {
-      await signInAnonymously(auth);
+      if (auth) await signInAnonymously(auth);
       setStep('dashboard');
+      setIsTracking(true);
     } catch (e) {
-      log('AUTH_ERR', e.message);
-      alert('Setup Failed: ' + e.message);
+      alert('Auth Failed: ' + e.message);
     }
   };
 
-  const handleSync = async () => {
-    if (queue.length === 0) return alert("Nothing to sync!");
-    if (!isOnline) return alert("No Internet Connection!");
-    if (!db) return alert("Database not initialized");
+  const handleStop = () => {
+    setIsTracking(false);
+  };
 
-    log('SYNC', `Attempting to sync ${queue.length} items...`);
+  const handleSync = async () => {
+    if (queue.length === 0) return alert("No data to sync");
+    if (!isOnline) return alert("No Internet");
+    if (!db) return alert("Database error");
+
     try {
       const promises = queue.map(item => addDoc(collection(db, 'logs'), item));
       await Promise.all(promises);
-
-      log('SYNC', 'Upload successful');
       setQueue([]);
       localStorage.removeItem('offline_queue');
-      alert("Sync Complete!");
+      alert("Synced Successfully!");
     } catch (e) {
-      log('SYNC_ERR', e.message);
       alert("Sync Failed: " + e.message);
     }
   };
 
-  const exportLogs = () => {
-    const text = LOGS.join('\n');
-    const blob = new Blob([text], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'debug_logs.txt';
-    a.click();
+  const clearHistory = () => {
+    if (confirm("Clear local history?")) {
+      setHistory([]);
+      localStorage.removeItem('loc_history');
+    }
   };
 
-  // --- UI COMPONENTS ---
+  // --- UI ---
 
-  const GlassCard = ({ children, className = "" }) => (
-    <div className={`backdrop-blur-xl bg-white/10 border border-white/20 shadow-xl rounded-3xl p-6 ${className}`}>
-      {children}
-    </div>
-  );
-
-  // --- WELCOME SCREEN ---
   if (step === 'welcome') return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 text-white flex flex-col items-center justify-center p-6 font-sans relative overflow-hidden">
-      {/* Background Orbs */}
-      <div className="absolute top-0 left-0 w-96 h-96 bg-blue-500/20 rounded-full blur-3xl -translate-x-1/2 -translate-y-1/2 animate-pulse" />
-      <div className="absolute bottom-0 right-0 w-96 h-96 bg-purple-500/20 rounded-full blur-3xl translate-x-1/2 translate-y-1/2 animate-pulse delay-1000" />
-
-      <GlassCard className="w-full max-w-sm flex flex-col items-center text-center z-10">
-        <div className="w-24 h-24 bg-gradient-to-tr from-blue-500 to-cyan-400 rounded-full flex items-center justify-center mb-6 shadow-lg shadow-blue-500/30 animate-bounce-slow">
-          <Navigation size={48} className="text-white" />
-        </div>
-
-        <h1 className="text-3xl font-bold mb-2 bg-gradient-to-r from-white to-slate-300 bg-clip-text text-transparent">
-          Location Keeper
-        </h1>
-        <p className="text-slate-300 mb-8 text-sm leading-relaxed">
-          Advanced secure tracking system. <br />
-          Offline-first architecture.
-        </p>
-
-        <button
-          onClick={handleStart}
-          className="w-full py-4 bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white rounded-xl font-bold shadow-lg shadow-blue-500/30 active:scale-95 transition-all flex items-center justify-center gap-3 group"
-        >
-          <Zap className="fill-current group-hover:scale-110 transition-transform" size={20} />
-          Initialize System
-        </button>
-
-        <div className="mt-6 text-[10px] text-slate-500 uppercase tracking-widest">
-          v2.2 • Secure Environment
-        </div>
-      </GlassCard>
+    <div className="min-h-screen bg-white flex flex-col items-center justify-center p-6 text-center font-sans text-slate-900">
+      <div className="mb-6 p-4 bg-blue-100 rounded-full text-blue-600">
+        <MapPin size={48} />
+      </div>
+      <h1 className="text-3xl font-bold mb-2">Location Tracker</h1>
+      <p className="text-slate-500 mb-8">Simple. Accurate. Secure.</p>
+      <button
+        onClick={handleStart}
+        className="w-full max-w-xs py-4 bg-blue-600 text-white rounded-lg font-bold shadow-md active:scale-95 transition-transform"
+      >
+        Start Tracking
+      </button>
     </div>
   );
 
-  // --- DASHBOARD ---
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans pb-24 relative">
-      {/* App Bar */}
-      <div className="bg-slate-900/80 backdrop-blur-md p-4 flex justify-between items-center sticky top-0 z-50 border-b border-white/5">
-        <div className="font-bold text-lg flex items-center gap-2 text-blue-400">
-          <Activity size={20} />
-          <span className="bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">Dashboard</span>
+    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-20">
+      {/* Header */}
+      <div className="bg-white border-b border-slate-200 p-4 sticky top-0 z-10 flex justify-between items-center shadow-sm">
+        <div className="font-bold text-lg flex items-center gap-2">
+          <Activity className={isTracking ? "text-green-600 animate-pulse" : "text-slate-400"} />
+          Tracker
         </div>
-        <div className={`text-[10px] font-bold px-3 py-1 rounded-full flex items-center gap-1.5 ${isOnline ? 'bg-green-500/10 text-green-400 border border-green-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
-          <div className={`w-1.5 h-1.5 rounded-full ${isOnline ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`} />
+        <div className={`px-3 py-1 rounded-full text-xs font-bold ${isOnline ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
           {isOnline ? 'ONLINE' : 'OFFLINE'}
         </div>
       </div>
 
-      <div className="p-4 space-y-4 max-w-md mx-auto">
+      <div className="p-4 max-w-2xl mx-auto space-y-6">
 
-        {/* Main Location Card */}
-        <GlassCard className="relative overflow-hidden">
-          <div className="absolute top-0 right-0 p-4 opacity-10">
-            <MapPin size={120} />
-          </div>
-
-          <div className="relative z-10">
-            <div className="flex items-center gap-2 mb-4">
-              <Radio size={16} className={`text-blue-400 ${isTracking ? 'animate-ping' : ''}`} />
-              <p className="text-blue-400 text-xs font-bold uppercase tracking-wider">Live Coordinates</p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4 mb-4">
-              <div>
-                <div className="text-xs text-slate-500 mb-1">Latitude</div>
-                <div className="text-2xl font-mono text-white">{location ? location.lat.toFixed(5) : "---"}</div>
-              </div>
-              <div>
-                <div className="text-xs text-slate-500 mb-1">Longitude</div>
-                <div className="text-2xl font-mono text-white">{location ? location.lng.toFixed(5) : "---"}</div>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 text-xs text-slate-400 bg-slate-900/50 p-2 rounded-lg border border-white/5">
-              <Activity size={12} />
-              Accuracy: {location ? Math.round(location.acc) + 'm' : 'N/A'}
-              <span className="mx-1">•</span>
-              {location ? new Date(location.time).toLocaleTimeString() : "Waiting for signal..."}
-            </div>
-          </div>
-        </GlassCard>
-
-        {/* Sync Section */}
-        <GlassCard>
-          <div className="flex justify-between items-center mb-6">
-            <div className="text-sm font-bold text-slate-200 flex items-center gap-2">
-              <Cloud size={18} className="text-blue-400" /> Data Queue
-            </div>
-            <div className="bg-blue-500/20 text-blue-300 px-3 py-1 rounded-full text-xs font-bold border border-blue-500/30">
-              {queue.length} Points
-            </div>
-          </div>
+        {/* Controls */}
+        <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex gap-3">
+          <button
+            onClick={() => setIsTracking(!isTracking)}
+            className={`flex-1 py-3 rounded-lg font-bold flex items-center justify-center gap-2 ${isTracking ? 'bg-red-50 text-red-600 border border-red-200' : 'bg-green-600 text-white shadow-md'}`}
+          >
+            {isTracking ? <><Square size={18} fill="currentColor" /> Stop</> : <><Play size={18} fill="currentColor" /> Start</>}
+          </button>
 
           <button
             onClick={handleSync}
             disabled={queue.length === 0}
-            className="w-full py-4 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-medium flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors border border-white/10"
+            className="flex-1 py-3 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg font-bold flex items-center justify-center gap-2 disabled:opacity-50"
           >
-            <Cloud size={18} /> Sync to Cloud
+            <Cloud size={18} /> Sync ({queue.length})
           </button>
-        </GlassCard>
+        </div>
 
-        {/* Debug Tools */}
-        <div className="grid grid-cols-2 gap-3">
-          <button onClick={exportLogs} className="py-4 bg-slate-900/50 border border-white/10 rounded-2xl text-xs font-medium text-slate-400 hover:bg-slate-800 hover:text-white transition-colors flex flex-col items-center justify-center gap-2">
-            <FileText size={20} /> Export Logs
-          </button>
-          <a href={`sms:?body=My Location: ${location?.lat},${location?.lng}`} className="py-4 bg-slate-900/50 border border-white/10 rounded-2xl text-xs font-medium text-slate-400 hover:bg-slate-800 hover:text-white transition-colors flex flex-col items-center justify-center gap-2">
-            <Smartphone size={20} /> SMS Location
-          </a>
+        {/* Current Status */}
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 text-center">
+          <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Last Known Location</div>
+          <div className="text-4xl font-light text-slate-800 mb-1">
+            {location ? location.lat.toFixed(5) : "--.----"}
+          </div>
+          <div className="text-4xl font-light text-slate-800 mb-4">
+            {location ? location.lng.toFixed(5) : "--.----"}
+          </div>
+          <div className="inline-block bg-slate-100 px-3 py-1 rounded-full text-xs text-slate-500">
+            {location ? location.displayTime : "Waiting for update..."}
+          </div>
+        </div>
+
+        {/* Data Table */}
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+          <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+            <h3 className="font-bold text-slate-700">History Log</h3>
+            <button onClick={clearHistory} className="text-red-500 p-1 hover:bg-red-50 rounded">
+              <Trash2 size={16} />
+            </button>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left">
+              <thead className="text-xs text-slate-500 uppercase bg-slate-50 border-b border-slate-100">
+                <tr>
+                  <th className="px-4 py-3">Time (IST)</th>
+                  <th className="px-4 py-3">Lat</th>
+                  <th className="px-4 py-3">Lng</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {history.length === 0 ? (
+                  <tr>
+                    <td colSpan="3" className="px-4 py-8 text-center text-slate-400 italic">
+                      No data recorded yet.
+                    </td>
+                  </tr>
+                ) : (
+                  history.map((row, i) => (
+                    <tr key={i} className="hover:bg-slate-50">
+                      <td className="px-4 py-3 font-medium text-slate-700 whitespace-nowrap">
+                        {row.displayTime}
+                      </td>
+                      <td className="px-4 py-3 text-slate-600">{row.lat.toFixed(5)}</td>
+                      <td className="px-4 py-3 text-slate-600">{row.lng.toFixed(5)}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
 
       </div>
