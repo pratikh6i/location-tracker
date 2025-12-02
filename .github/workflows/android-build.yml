@@ -25,8 +25,8 @@ jobs:
       - name: Build Web Assets
         run: npm run build
 
-      - name: Add Android Platform
-        run: npx cap add android
+      - name: Sync Android Project
+        run: npx cap sync android
 
       - name: Setup Java
         uses: actions/setup-java@v3
