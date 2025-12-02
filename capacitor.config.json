@@ -1,0 +1,5 @@
+{
+  "appId": "com.example.locationtracker",
+  "appName": "LocationTracker",
+  "webDir": "dist"
+}
