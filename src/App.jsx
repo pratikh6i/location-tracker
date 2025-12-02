@@ -15,11 +15,12 @@ import {
   onSnapshot
 } from 'firebase/firestore';
 import { 
-  MapPin, Wifi, WifiOff, Settings, LogOut, UploadCloud, Smartphone, AlertTriangle, ShieldCheck, Activity, FileSpreadsheet
+  MapPin, Wifi, WifiOff, Settings, LogOut, Smartphone, Activity, AlertCircle, CheckCircle, Shield
 } from 'lucide-react';
 
-// --- CONFIGURATION PLACEHOLDERS ---
-// YOU MUST REPLACE THESE VALUES IN THE FIREBASE CONSOLE OR HERE BEFORE BUILDING
+// ==========================================
+// ⚠️ ACTION REQUIRED: REPLACE THESE KEYS!
+// ==========================================
 const firebaseConfig = {
   apiKey: "REPLACE_WITH_YOUR_API_KEY",
   authDomain: "REPLACE_WITH_YOUR_PROJECT_ID.firebaseapp.com",
@@ -29,80 +30,72 @@ const firebaseConfig = {
   appId: "1:123456789:web:abcdef"
 };
 
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
+// Initialize Firebase safely
+let app, auth, db;
+try {
+  app = initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  db = getFirestore(app);
+} catch (e) {
+  console.error("Firebase Init Error", e);
+}
 
-// ... (Rest of the component logic tailored for mobile) ...
+// --- BEAUTIFUL UI COMPONENTS ---
 
-const useAuth = () => {
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setLoading(false);
-    });
-    return () => unsubscribe();
-  }, []);
-
-  const login = async () => {
-    const provider = new GoogleAuthProvider();
-    try {
-      await signInWithPopup(auth, provider);
-    } catch (error) {
-      console.error("Login Error", error);
-      // Fallback for demo/testing without full SHA-1 setup
-      await signInAnonymously(auth);
-    }
-  };
-
-  const logout = () => signOut(auth);
-  return { user, loading, login, logout };
-};
-
-const LoginScreen = ({ onLogin }) => (
-  <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-6">
-    <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-8 text-center border border-gray-100">
-      <div className="mx-auto w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center mb-6">
-        <MapPin className="text-blue-600 w-8 h-8" />
-      </div>
-      <h1 className="text-2xl font-bold text-gray-800 mb-2">Secure Tracker</h1>
-      <button onClick={onLogin} className="w-full mt-6 bg-blue-600 text-white py-3 rounded-lg font-medium">
-        Sign In / Start
-      </button>
-    </div>
+const Card = ({ children, className = "" }) => (
+  <div className={`bg-white rounded-[24px] shadow-sm border border-gray-100 p-6 ${className}`}>
+    {children}
   </div>
 );
 
+const Button = ({ onClick, children, variant = "primary", icon: Icon, className = "" }) => {
+  const baseStyle = "w-full py-4 rounded-[16px] font-medium flex items-center justify-center gap-3 transition-all active:scale-95";
+  const variants = {
+    primary: "bg-[#1a73e8] text-white shadow-md shadow-blue-200",
+    secondary: "bg-[#e8f0fe] text-[#1a73e8]",
+    outline: "border border-gray-200 text-gray-600 hover:bg-gray-50",
+    danger: "bg-red-50 text-red-600"
+  };
+  return (
+    <button onClick={onClick} className={`${baseStyle} ${variants[variant]} ${className}`}>
+      {Icon && <Icon size={20} />}
+      {children}
+    </button>
+  );
+};
+
+const StatusBadge = ({ isOnline }) => (
+  <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium ${
+    isOnline ? 'bg-green-50 text-green-700' : 'bg-orange-50 text-orange-700'
+  }`}>
+    <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-green-500' : 'bg-orange-500 animate-pulse'}`} />
+    {isOnline ? 'Online' : 'Offline Mode'}
+  </div>
+);
+
+// --- MAIN LOGIC ---
+
 export default function App() {
-  const { user, loading, login, logout } = useAuth();
+  const [user, setUser] = useState(null);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [lastLocation, setLastLocation] = useState(null);
   const [locationQueue, setLocationQueue] = useState([]);
-  const [settings, setSettings] = useState({ smsNumber: '', offlineThresholdHours: 2, sheetUrl: '' });
-  const [alertMessage, setAlertMessage] = useState(null);
+  const [settings, setSettings] = useState({ smsNumber: '', offlineThresholdHours: 2 });
+  const [errorMsg, setErrorMsg] = useState(null);
+  const [loading, setLoading] = useState(true);
 
-  // Load Settings
+  // Auth Listener
   useEffect(() => {
-    if (!user) return;
-    const savedQueue = localStorage.getItem(`queue_${user.uid}`);
-    if (savedQueue) setLocationQueue(JSON.parse(savedQueue));
-    const unsub = onSnapshot(doc(db, 'users', user.uid, 'settings', 'config'), (d) => {
-      if (d.exists()) setSettings(d.data());
+    if (!auth) return;
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setLoading(false);
     });
     return () => unsub();
-  }, [user]);
+  }, []);
 
-  // Persist Queue
-  useEffect(() => {
-    if (!user) return;
-    localStorage.setItem(`queue_${user.uid}`, JSON.stringify(locationQueue));
-  }, [locationQueue, user]);
-
-  // Network Monitor
+  // Sync Logic
   useEffect(() => {
     const handleStatus = () => setIsOnline(navigator.onLine);
     window.addEventListener('online', handleStatus);
@@ -110,9 +103,14 @@ export default function App() {
     return () => { window.removeEventListener('online', handleStatus); window.removeEventListener('offline', handleStatus); };
   }, []);
 
-  // Tracking Loop
+  // Tracking Logic
   useEffect(() => {
     if (!user) return;
+    
+    // Load local queue
+    const savedQueue = localStorage.getItem(`queue_${user.uid}`);
+    if (savedQueue) setLocationQueue(JSON.parse(savedQueue));
+
     const track = () => {
       if (!navigator.geolocation) return;
       navigator.geolocation.getCurrentPosition(
@@ -120,111 +118,180 @@ export default function App() {
           const log = {
             lat: pos.coords.latitude,
             lng: pos.coords.longitude,
+            acc: pos.coords.accuracy,
             time: new Date().toISOString()
           };
           setLastLocation(log);
+          
           if (navigator.onLine) {
-             // Simulate upload or call your cloud function here
-             console.log("Uploading", log);
+             // Here we would sync to Firestore
+             console.log("Syncing", log);
           } else {
-             setLocationQueue(prev => [...prev, log]);
+             setLocationQueue(prev => {
+               const newQ = [...prev, log];
+               localStorage.setItem(`queue_${user.uid}`, JSON.stringify(newQ));
+               return newQ;
+             });
           }
         },
         (err) => console.error(err),
         { enableHighAccuracy: true }
       );
     };
-    track();
+
+    track(); // Immediate
     const interval = setInterval(track, 300000); // 5 mins
     return () => clearInterval(interval);
   }, [user]);
 
-  const handleSave = async () => {
-    if (!user) return;
-    await setDoc(doc(db, 'users', user.uid, 'settings', 'config'), settings);
-    setAlertMessage("Settings Saved");
-    setTimeout(() => setAlertMessage(null), 3000);
+  const handleLogin = async () => {
+    setErrorMsg(null);
+    try {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+    } catch (err) {
+      console.error(err);
+      setErrorMsg(err.message); // Show exact error
+    }
+  };
+
+  const handleGuestLogin = async () => {
+    try {
+      await signInAnonymously(auth);
+    } catch (err) {
+      setErrorMsg(err.message);
+    }
   };
 
   const generateSMSLink = () => {
-    const body = `HELP: Last loc ${lastLocation?.lat},${lastLocation?.lng}`;
+    if (!lastLocation) return "#";
+    const body = `HELP: Last Known Loc: ${lastLocation.lat},${lastLocation.lng} at ${new Date(lastLocation.time).toLocaleTimeString()}`;
     return `sms:${settings.smsNumber}?body=${encodeURIComponent(body)}`;
   };
 
-  if (loading) return <div>Loading...</div>;
-  if (!user) return <LoginScreen onLogin={login} />;
+  if (loading) return <div className="h-screen flex items-center justify-center text-[#1a73e8]">Loading...</div>;
 
-  return (
-    <div className="min-h-screen bg-gray-50 pb-20 font-sans">
-      <header className="bg-white p-4 shadow-sm flex justify-between items-center sticky top-0 z-10">
-        <div className="font-bold text-lg flex items-center gap-2">
-          <div className={`w-3 h-3 rounded-full ${isOnline ? 'bg-green-500' : 'bg-red-500'}`} />
-          LocationSync
+  // --- LOGIN SCREEN ---
+  if (!user) return (
+    <div className="min-h-screen bg-white flex flex-col p-6 items-center justify-center text-center">
+      <div className="w-20 h-20 bg-blue-50 rounded-[28px] flex items-center justify-center mb-8">
+        <MapPin className="text-[#1a73e8] w-10 h-10" />
+      </div>
+      <h1 className="text-3xl font-bold text-gray-900 mb-2 font-sans tracking-tight">Location Sync</h1>
+      <p className="text-gray-500 mb-10 text-lg">Secure, offline-first tracking.</p>
+      
+      {errorMsg && (
+        <div className="w-full bg-red-50 text-red-600 p-4 rounded-xl text-sm mb-6 text-left border border-red-100 flex gap-2">
+           <AlertCircle className="shrink-0 w-5 h-5"/>
+           {errorMsg}
         </div>
-        <button onClick={logout}><LogOut className="w-5 h-5" /></button>
+      )}
+
+      <div className="w-full space-y-4 max-w-sm">
+        <Button onClick={handleLogin} icon={Shield}>
+          Sign in with Google
+        </Button>
+        <Button onClick={handleGuestLogin} variant="secondary">
+          Continue as Guest
+        </Button>
+      </div>
+    </div>
+  );
+
+  // --- DASHBOARD ---
+  return (
+    <div className="min-h-screen bg-[#F0F4F8] pb-24 font-sans text-gray-800">
+      
+      {/* Header */}
+      <header className="bg-white px-6 py-5 shadow-sm flex justify-between items-center sticky top-0 z-10">
+        <span className="font-bold text-xl text-gray-700 tracking-tight">Dashboard</span>
+        <button onClick={() => signOut(auth)} className="bg-gray-100 p-2 rounded-full text-gray-600 hover:bg-red-50 hover:text-red-500 transition-colors">
+          <LogOut size={20} />
+        </button>
       </header>
 
-      {alertMessage && <div className="bg-green-100 p-3 text-center text-green-800 text-sm">{alertMessage}</div>}
-
-      <main className="p-4 space-y-4">
-        {activeTab === 'dashboard' && (
+      <main className="p-4 space-y-5 max-w-lg mx-auto mt-2">
+        
+        {activeTab === 'dashboard' ? (
           <>
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 text-center">
-              <div className="text-gray-500 text-sm uppercase tracking-wide mb-2">Current Status</div>
-              <div className="text-2xl font-bold mb-4">{isOnline ? 'Online & Syncing' : 'Offline Mode'}</div>
-              {lastLocation ? (
-                 <div className="bg-blue-50 p-4 rounded-lg font-mono text-blue-800">
-                   {lastLocation.lat.toFixed(5)}, {lastLocation.lng.toFixed(5)}
+            {/* Status Card */}
+            <Card className="flex flex-col items-center text-center py-10 relative overflow-hidden">
+               <div className={`absolute top-0 left-0 w-full h-1 ${isOnline ? 'bg-green-500' : 'bg-orange-500'}`} />
+               
+               <StatusBadge isOnline={isOnline} />
+               
+               <div className="mt-8 mb-2 text-5xl font-mono font-light text-gray-800 tracking-tighter">
+                 {lastLocation ? (
+                   <>
+                     {lastLocation.lat.toFixed(4)}
+                     <span className="text-gray-300 text-3xl mx-2">/</span>
+                     {lastLocation.lng.toFixed(4)}
+                   </>
+                 ) : (
+                   <span className="text-gray-300 text-2xl">Locating...</span>
+                 )}
+               </div>
+               <p className="text-gray-400 text-sm">Latitude / Longitude</p>
+
+               {!isOnline && (
+                 <div className="mt-6 flex items-center gap-2 text-orange-600 bg-orange-50 px-4 py-2 rounded-lg text-sm font-medium">
+                   <Activity size={16} />
+                   {locationQueue.length} Logs Queued
                  </div>
-              ) : (
-                <div className="text-gray-400">Locating...</div>
-              )}
+               )}
+            </Card>
+
+            {/* Actions */}
+            <div className="grid grid-cols-2 gap-4">
+               <a href={generateSMSLink()} className="col-span-2">
+                 <Button variant="outline" icon={Smartphone} className="bg-white border-none shadow-sm text-gray-700 justify-between px-6">
+                   Send SMS Alert
+                 </Button>
+               </a>
             </div>
-
-            {!isOnline && (
-              <div className="bg-orange-50 p-4 rounded-xl border border-orange-100 flex items-center justify-between">
-                <span className="text-orange-800 font-bold">{locationQueue.length} Pending Logs</span>
-                <Activity className="text-orange-400" />
-              </div>
-            )}
-
-            <a href={generateSMSLink()} className="block w-full bg-white border border-gray-200 p-4 rounded-xl text-center shadow-sm hover:bg-gray-50">
-              <Smartphone className="inline-block w-5 h-5 mr-2 text-gray-600" />
-              <span className="font-medium">Test SMS Alert</span>
-            </a>
           </>
-        )}
-
-        {activeTab === 'settings' && (
-          <div className="bg-white p-6 rounded-xl shadow-sm space-y-4">
-            <h2 className="font-bold text-lg">Config</h2>
-            <input 
-              type="text" 
-              placeholder="Google Script URL" 
-              className="w-full p-3 border rounded-lg"
-              value={settings.sheetUrl}
-              onChange={e => setSettings({...settings, sheetUrl: e.target.value})}
-            />
-            <input 
-              type="tel" 
-              placeholder="Emergency SMS Number" 
-              className="w-full p-3 border rounded-lg"
-              value={settings.smsNumber}
-              onChange={e => setSettings({...settings, smsNumber: e.target.value})}
-            />
-            <button onClick={handleSave} className="w-full bg-blue-600 text-white p-3 rounded-lg font-bold">Save Settings</button>
+        ) : (
+          /* Settings Tab */
+          <div className="space-y-4">
+             <Card>
+               <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
+                 <Settings size={20} className="text-gray-400"/> Configuration
+               </h2>
+               <div className="space-y-4">
+                 <div>
+                   <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Emergency Number</label>
+                   <input 
+                     type="tel" 
+                     placeholder="+1 234..."
+                     className="w-full mt-2 p-4 bg-gray-50 rounded-xl outline-none focus:ring-2 focus:ring-blue-100 transition-all"
+                     value={settings.smsNumber}
+                     onChange={e => setSettings({...settings, smsNumber: e.target.value})}
+                   />
+                 </div>
+                 <Button onClick={() => setActiveTab('dashboard')}>Save & Close</Button>
+               </div>
+             </Card>
           </div>
         )}
+
       </main>
 
-      <nav className="fixed bottom-0 w-full bg-white border-t flex justify-around p-4 z-20">
-        <button onClick={() => setActiveTab('dashboard')} className={activeTab === 'dashboard' ? 'text-blue-600' : 'text-gray-400'}>
-          <Activity />
+      {/* Bottom Nav */}
+      <nav className="fixed bottom-0 w-full bg-white border-t border-gray-100 flex justify-around p-4 z-20 pb-safe">
+        <button 
+          onClick={() => setActiveTab('dashboard')} 
+          className={`p-3 rounded-2xl transition-colors ${activeTab === 'dashboard' ? 'bg-blue-50 text-blue-600' : 'text-gray-400'}`}
+        >
+          <Activity size={24} />
         </button>
-        <button onClick={() => setActiveTab('settings')} className={activeTab === 'settings' ? 'text-blue-600' : 'text-gray-400'}>
-          <Settings />
+        <button 
+          onClick={() => setActiveTab('settings')} 
+          className={`p-3 rounded-2xl transition-colors ${activeTab === 'settings' ? 'bg-blue-50 text-blue-600' : 'text-gray-400'}`}
+        >
+          <Settings size={24} />
         </button>
       </nav>
+
     </div>
   );
 }
