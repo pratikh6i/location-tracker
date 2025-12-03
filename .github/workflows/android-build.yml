@@ -35,6 +35,13 @@ jobs:
           # Add all required permissions before the application tag
           sed -i '/<application/i \    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />\n    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />\n    <uses-feature android:name="android.hardware.location.gps" />' $MANIFEST_PATH
           echo "Updated AndroidManifest.xml with all permissions"
+          
+      - name: Add Native Service to Manifest
+        run: |
+          MANIFEST_PATH="android/app/src/main/AndroidManifest.xml"
+          # Add service declaration before </application>
+          sed -i '/<\/application>/i \        <service\n            android:name=".LocationTrackerService"\n            android:enabled="true"\n            android:exported="false"\n            android:foregroundServiceType="location" />' $MANIFEST_PATH
+          echo "Added LocationTrackerService to manifest"
           cat $MANIFEST_PATH
 
       - name: Setup Java 21

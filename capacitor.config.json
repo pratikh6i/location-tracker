@@ -1,5 +1,25 @@
 {
   "appId": "com.example.locationtracker",
   "appName": "LocationTracker",
-  "webDir": "dist"
+  "webDir": "dist",
+  "plugins": {
+    "Geolocation": {
+      "backgroundLocationUpdates": true,
+      "distanceFilter": 10
+    },
+    "Filesystem": {
+      "androidDisplayName": "Location Tracker Files"
+    },
+    "SplashScreen": {
+      "launchShowDuration": 2000,
+      "backgroundColor": "#667eea",
+      "androidSplashResourceName": "splash",
+      "androidScaleType": "CENTER_CROP"
+    }
+  },
+  "android": {
+    "allowMixedContent": true,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": true
+  }
 }
