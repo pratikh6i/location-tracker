@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import BackgroundGeolocation from '@transistorsoft/capacitor-background-geolocation';
+import { Geolocation } from '@capacitor/geolocation';
+import { App as CapApp } from '@capacitor/app';
 
 // ============================================
-// COMPREHENSIVE LOGGING SYSTEM
+// LOGGING SYSTEM
 // ============================================
 class Logger {
   constructor() {
@@ -14,9 +15,7 @@ class Logger {
   loadLogs() {
     try {
       const saved = localStorage.getItem('app_logs');
-      if (saved) {
-        this.logs = JSON.parse(saved);
-      }
+      if (saved) this.logs = JSON.parse(saved);
     } catch (e) {
       console.error('Failed to load logs:', e);
     }
@@ -42,14 +41,7 @@ class Logger {
       fractionalSecondDigits: 3
     });
 
-    const entry = {
-      timestamp,
-      level,
-      category,
-      message,
-      data: data ? JSON.stringify(data) : null
-    };
-
+    const entry = { timestamp, level, category, message, data: data ? JSON.stringify(data) : null };
     this.logs.push(entry);
 
     const consoleMsg = `[${timestamp}] [${level}] [${category}] ${message}`;
@@ -57,9 +49,7 @@ class Logger {
     else if (level === 'WARN') console.warn(consoleMsg, data);
     else console.log(consoleMsg, data);
 
-    if (this.logs.length >= this.maxLogs) {
-      this.logs = this.logs.slice(-this.maxLogs);
-    }
+    if (this.logs.length >= this.maxLogs) this.logs = this.logs.slice(-this.maxLogs);
     this.saveLogs();
   }
 
@@ -95,17 +85,16 @@ class Logger {
 const logger = new Logger();
 
 // ============================================
-// STORAGE MANAGER - Prevents data loss
+// STORAGE MANAGER
 // ============================================
 class StorageManager {
   static saveHistory(history) {
     try {
       localStorage.setItem('location_history', JSON.stringify(history));
       localStorage.setItem('location_history_backup', JSON.stringify(history));
-      logger.debug('STORAGE', 'History saved with backup');
       return true;
     } catch (e) {
-      logger.error('STORAGE', 'Failed to save history', e);
+      logger.error('STORAGE', 'Save failed', e);
       return false;
     }
   }
@@ -113,19 +102,16 @@ class StorageManager {
   static loadHistory() {
     try {
       const primary = localStorage.getItem('location_history');
-      if (primary) {
-        return JSON.parse(primary);
-      }
+      if (primary) return JSON.parse(primary);
 
       const backup = localStorage.getItem('location_history_backup');
       if (backup) {
-        logger.warn('STORAGE', 'Using backup history');
+        logger.warn('STORAGE', 'Using backup');
         return JSON.parse(backup);
       }
-
       return [];
     } catch (e) {
-      logger.error('STORAGE', 'Failed to load history', e);
+      logger.error('STORAGE', 'Load failed', e);
       return [];
     }
   }
@@ -139,112 +125,69 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [logs, setLogs] = useState([]);
-  const [bgInitialized, setBgInitialized] = useState(false);
 
-  // Tracking lock to prevent concurrent calls
   const trackingLock = useRef(false);
-  const mounted = useRef(true);
+  const intervalRef = useRef(null);
+  const lastCaptureTime = useRef(0);
 
-  // Load data on mount
+  // Load data
   useEffect(() => {
-    logger.info('APP', 'Application started');
-    mounted.current = true;
+    logger.info('APP', 'Started');
 
-    try {
-      const loadedHistory = StorageManager.loadHistory();
-      setHistory(loadedHistory);
-      logger.info('STORAGE', `Loaded ${loadedHistory.length} history records`);
+    const loadedHistory = StorageManager.loadHistory();
+    setHistory(loadedHistory);
+    logger.info('STORAGE', `Loaded ${loadedHistory.length} records`);
 
-      const savedInterval = localStorage.getItem('tracking_interval');
-      if (savedInterval) {
-        setInterval(parseInt(savedInterval));
-        logger.info('STORAGE', `Loaded interval: ${savedInterval} minutes`);
-      }
-
-      // Initialize background geolocation
-      initializeBackgroundGeolocation();
-    } catch (e) {
-      logger.error('APP', 'Error during initialization', e);
+    const savedInterval = localStorage.getItem('tracking_interval');
+    if (savedInterval) {
+      setInterval(parseInt(savedInterval));
+      logger.info('STORAGE', `Interval: ${savedInterval} min`);
     }
 
+    // Resume tracking if was active
+    const wasTracking = localStorage.getItem('was_tracking') === 'true';
+    if (wasTracking) {
+      logger.info('APP', 'Resuming tracking');
+      setIsTracking(true);
+    }
+
+    // App state listener (for background tracking)
+    CapApp.addListener('appStateChange', ({ isActive }) => {
+      logger.info('APP_STATE', isActive ? 'Foreground' : 'Background');
+    });
+
     return () => {
-      mounted.current = false;
-      logger.info('APP', 'Application closing');
+      logger.info('APP', 'Closing');
     };
   }, []);
 
-  // Refresh logs
-  useEffect(() => {
-    if (showLogs) {
-      setLogs(logger.getLogs());
-    }
-  }, [showLogs]);
+  // Track location function
+  const captureLocation = async () => {
+    const now = Date.now();
 
-  // Initialize background geolocation
-  const initializeBackgroundGeolocation = async () => {
-    try {
-      logger.info('BG_GEO', 'Initializing background geolocation');
-
-      await BackgroundGeolocation.ready({
-        // Geolocation Config
-        desiredAccuracy: BackgroundGeolocation.DESIRED_ACCURACY_HIGH,
-        distanceFilter: 0,
-        stopTimeout: 5,
-
-        // Activity Recognition
-        stopOnTerminate: false,
-        startOnBoot: true,
-
-        // Application config
-        debug: false,
-        logLevel: BackgroundGeolocation.LOG_LEVEL_VERBOSE,
-
-        // Android specific
-        foregroundService: true,
-        notification: {
-          title: 'Location Tracker',
-          text: 'Tracking your location',
-          color: '#667eea'
-        },
-
-        // Heartbeat (for periodic tracking)
-        heartbeatInterval: 60
-      });
-
-      // Location event listener
-      BackgroundGeolocation.onLocation(onBackgroundLocation, onLocationError);
-
-      // Heartbeat event (fires every minute when tracking)
-      BackgroundGeolocation.onHeartbeat(onHeartbeat);
-
-      setBgInitialized(true);
-      logger.info('BG_GEO', 'Background geolocation initialized');
-    } catch (e) {
-      logger.error('BG_GEO', 'Failed to initialize', e);
-    }
-  };
-
-  // Background location callback
-  const onBackgroundLocation = (location) => {
-    if (trackingLock.current) {
-      logger.debug('BG_GEO', 'Location received but locked, skipping');
+    // Prevent rapid duplicate calls
+    if (trackingLock.current || (now - lastCaptureTime.current) < 10000) {
+      logger.debug('TRACK', 'Skipped (locked or too soon)');
       return;
     }
 
     trackingLock.current = true;
 
     try {
-      logger.info('BG_GEO', 'Background location received', {
-        lat: location.coords.latitude,
-        lng: location.coords.longitude
+      logger.debug('TRACK', 'Requesting position');
+
+      const position = await Geolocation.getCurrentPosition({
+        enableHighAccuracy: true,
+        timeout: 30000,
+        maximumAge: 0
       });
 
       const istDate = new Date();
       const newEntry = {
-        id: Date.now(),
-        latitude: location.coords.latitude,
-        longitude: location.coords.longitude,
-        accuracy: Math.round(location.coords.accuracy),
+        id: now,
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        accuracy: Math.round(position.coords.accuracy),
         timestamp: istDate.toLocaleString('en-IN', {
           timeZone: 'Asia/Kolkata',
           day: '2-digit',
@@ -256,113 +199,115 @@ export default function App() {
         })
       };
 
-      if (mounted.current) {
-        setCurrentLocation(newEntry);
+      logger.info('TRACK', 'Captured', { lat: newEntry.latitude, lng: newEntry.longitude });
 
-        setHistory(prev => {
-          const isDuplicate = prev.some(item =>
-            Math.abs(item.id - newEntry.id) < 5000 // 5 second window
-          );
+      setCurrentLocation(newEntry);
+      lastCaptureTime.current = now;
 
-          if (isDuplicate) {
-            logger.warn('BG_GEO', 'Prevented duplicate entry');
-            return prev;
-          }
+      setHistory(prev => {
+        // Strict duplicate check
+        const isDuplicate = prev.some(item =>
+          Math.abs(item.latitude - newEntry.latitude) < 0.00001 &&
+          Math.abs(item.longitude - newEntry.longitude) < 0.00001 &&
+          Math.abs(item.id - newEntry.id) < 60000
+        );
 
-          const updated = [newEntry, ...prev].slice(0, 50);
-          StorageManager.saveHistory(updated);
-          logger.info('BG_GEO', `History updated: ${updated.length} records`);
-          return updated;
-        });
-      }
-    } catch (e) {
-      logger.error('BG_GEO', 'Error processing location', e);
+        if (isDuplicate) {
+          logger.warn('TRACK', 'Duplicate prevented');
+          return prev;
+        }
+
+        const updated = [newEntry, ...prev].slice(0, 50);
+        StorageManager.saveHistory(updated);
+        logger.info('STORAGE', `Saved: ${updated.length} records`);
+        return updated;
+      });
+    } catch (error) {
+      logger.error('TRACK', 'Failed', error);
     } finally {
       trackingLock.current = false;
     }
   };
 
-  const onLocationError = (error) => {
-    logger.error('BG_GEO', 'Location error', error);
-  };
-
-  const onHeartbeat = async (event) => {
-    logger.debug('BG_GEO', 'Heartbeat event');
-
-    // Request location on heartbeat
-    try {
-      const location = await BackgroundGeolocation.getCurrentPosition({
-        timeout: 30,
-        maximumAge: 5000,
-        persist: false
-      });
-      onBackgroundLocation(location);
-    } catch (e) {
-      logger.warn('BG_GEO', 'Heartbeat location failed', e);
+  // Tracking control
+  useEffect(() => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
     }
-  };
 
-  // Start/Stop tracking
+    if (!isTracking) {
+      logger.info('TRACK', 'Stopped');
+      localStorage.setItem('was_tracking', 'false');
+      return;
+    }
+
+    logger.info('TRACK', `Started (${interval} min interval)`);
+    localStorage.setItem('was_tracking', 'true');
+
+    // Capture immediately
+    captureLocation();
+
+    // Then at intervals
+    const intervalMs = interval * 60 * 1000;
+    intervalRef.current = setInterval(() => {
+      logger.debug('TRACK', 'Interval trigger');
+      captureLocation();
+    }, intervalMs);
+
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+  }, [isTracking, interval]);
+
+  // Refresh logs
+  useEffect(() => {
+    if (showLogs) setLogs(logger.getLogs());
+  }, [showLogs]);
+
   const handleStartTracking = async () => {
     try {
-      logger.info('USER', 'Start tracking requested');
+      logger.info('USER', 'Start requested');
+      const permission = await Geolocation.checkPermissions();
 
-      if (!bgInitialized) {
-        logger.warn('USER', 'Background geo not initialized, waiting...');
-        await initializeBackgroundGeolocation();
+      if (permission.location !== 'granted') {
+        logger.warn('USER', 'Requesting permission');
+        await Geolocation.requestPermissions();
+        return;
       }
 
-      await BackgroundGeolocation.start();
       setIsTracking(true);
-      logger.info('BG_GEO', 'Tracking started');
-
-      // Set interval for heartbeat
-      await BackgroundGeolocation.setConfig({
-        heartbeatInterval: interval * 60 // Convert minutes to seconds
-      });
-
     } catch (e) {
-      logger.error('USER', 'Failed to start tracking', e);
-      alert('Failed to start tracking: ' + e.message);
+      logger.error('USER', 'Start failed', e);
+      alert('Failed to start: ' + e.message);
     }
   };
 
-  const handleStopTracking = async () => {
-    try {
-      logger.info('USER', 'Stop tracking requested');
-      await BackgroundGeolocation.stop();
-      setIsTracking(false);
-      logger.info('BG_GEO', 'Tracking stopped');
-    } catch (e) {
-      logger.error('USER', 'Failed to stop tracking', e);
-    }
+  const handleStopTracking = () => {
+    logger.info('USER', 'Stop requested');
+    setIsTracking(false);
   };
 
   const clearHistory = () => {
-    if (window.confirm('Clear all location history?')) {
+    if (window.confirm('Clear all history?')) {
       logger.info('USER', 'Clearing history');
       setHistory([]);
       StorageManager.saveHistory([]);
     }
   };
 
-  const saveInterval = async (newInterval) => {
-    logger.info('USER', `Saving interval: ${newInterval} minutes`);
+  const saveInterval = (newInterval) => {
+    logger.info('USER', `Interval: ${newInterval} min`);
     setInterval(newInterval);
     localStorage.setItem('tracking_interval', newInterval.toString());
+    setShowSettings(false);
 
     if (isTracking) {
-      try {
-        await BackgroundGeolocation.setConfig({
-          heartbeatInterval: newInterval * 60
-        });
-        logger.info('BG_GEO', 'Interval updated while tracking');
-      } catch (e) {
-        logger.error('BG_GEO', 'Failed to update interval', e);
-      }
+      alert('Restart tracking for change to take effect');
     }
-
-    setShowSettings(false);
   };
 
   return (
@@ -398,16 +343,13 @@ export default function App() {
 
       <div className="container py-4">
 
-        {/* Log Viewer */}
+        {/* Logs */}
         {showLogs && (
           <div className="row mb-4">
             <div className="col-12">
               <div className="card shadow-lg border-0">
                 <div className="card-header d-flex justify-content-between align-items-center" style={{ background: '#764ba2', color: 'white' }}>
-                  <h5 className="mb-0">
-                    <i className="bi bi-file-text me-2"></i>
-                    Debug Logs ({logs.length})
-                  </h5>
+                  <h5 className="mb-0">Logs ({logs.length})</h5>
                   <div>
                     <button className="btn btn-sm btn-light me-2" onClick={() => setLogs(logger.getLogs())}>
                       <i className="bi bi-arrow-clockwise"></i>
@@ -420,25 +362,17 @@ export default function App() {
                     </button>
                   </div>
                 </div>
-                <div className="card-body p-0" style={{ maxHeight: '300px', overflow: 'auto', background: '#1e1e1e', color: '#d4d4d4', fontFamily: 'monospace', fontSize: '11px' }}>
+                <div className="card-body p-0" style={{ maxHeight: '300px', overflow: 'auto', background: '#1e1e1e', color: '#d4d4d4' }}>
                   {logs.length === 0 ? (
-                    <div className="p-3 text-center text-muted">No logs</div>
+                    <div className="p-3 text-center">No logs</div>
                   ) : (
-                    <table className="table table-sm table-dark table-striped mb-0">
-                      <thead style={{ position: 'sticky', top: 0, background: '#2d2d2d' }}>
-                        <tr>
-                          <th style={{ width: '160px', fontSize: '10px' }}>Time</th>
-                          <th style={{ width: '70px' }}>Level</th>
-                          <th style={{ width: '100px' }}>Category</th>
-                          <th>Message</th>
-                        </tr>
-                      </thead>
+                    <table className="table table-sm table-dark mb-0" style={{ fontSize: '11px' }}>
                       <tbody>
                         {logs.slice().reverse().slice(0, 100).map((log, i) => (
                           <tr key={i}>
-                            <td style={{ fontSize: '9px' }}>{log.timestamp}</td>
-                            <td><span className={`badge bg-${log.level === 'ERROR' ? 'danger' : log.level === 'WARN' ? 'warning' : log.level === 'INFO' ? 'info' : 'secondary'} small`}>{log.level}</span></td>
-                            <td>{log.category}</td>
+                            <td style={{ width: '160px', fontSize: '9px' }}>{log.timestamp}</td>
+                            <td style={{ width: '60px' }}><span className={`badge bg-${log.level === 'ERROR' ? 'danger' : log.level === 'WARN' ? 'warning' : 'info'}`}>{log.level}</span></td>
+                            <td style={{ width: '80px' }}>{log.category}</td>
                             <td>{log.message}</td>
                           </tr>
                         ))}
@@ -457,34 +391,22 @@ export default function App() {
             <div className="col-12">
               <div className="card shadow-lg border-0">
                 <div className="card-header" style={{ background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)', color: 'white' }}>
-                  <h5 className="mb-0">
-                    <i className="bi bi-gear me-2"></i>
-                    Settings
-                  </h5>
+                  <h5 className="mb-0"><i className="bi bi-gear me-2"></i>Settings</h5>
                 </div>
                 <div className="card-body">
                   <label className="form-label fw-bold">Tracking Interval</label>
-                  <select
-                    className="form-select mb-3"
-                    value={interval}
-                    onChange={(e) => setInterval(parseInt(e.target.value))}
-                  >
-                    <option value={1}>Every 1 minute</option>
-                    <option value={2}>Every 2 minutes</option>
-                    <option value={5}>Every 5 minutes</option>
-                    <option value={10}>Every 10 minutes</option>
-                    <option value={15}>Every 15 minutes</option>
-                    <option value={30}>Every 30 minutes</option>
-                    <option value={60}>Every 1 hour</option>
+                  <select className="form-select mb-3" value={interval} onChange={(e) => setInterval(parseInt(e.target.value))}>
+                    <option value={1}>1 minute</option>
+                    <option value={2}>2 minutes</option>
+                    <option value={5}>5 minutes</option>
+                    <option value={10}>10 minutes</option>
+                    <option value={15}>15 minutes</option>
+                    <option value={30}>30 minutes</option>
+                    <option value={60}>1 hour</option>
                   </select>
-
                   <div className="d-flex gap-2">
-                    <button className="btn btn-primary" onClick={() => saveInterval(interval)}>
-                      Save
-                    </button>
-                    <button className="btn btn-secondary" onClick={() => setShowSettings(false)}>
-                      Cancel
-                    </button>
+                    <button className="btn btn-primary" onClick={() => saveInterval(interval)}>Save</button>
+                    <button className="btn btn-secondary" onClick={() => setShowSettings(false)}>Cancel</button>
                   </div>
                 </div>
               </div>
@@ -492,36 +414,23 @@ export default function App() {
           </div>
         )}
 
-        {/* Info Banner */}
+        {/* Controls */}
         <div className="row mb-4">
-          <div className="col-12">
-            <div className="alert alert-info shadow-lg border-0">
-              <i className="bi bi-info-circle me-2"></i>
-              <strong>Background Tracking Active:</strong> App will continue tracking even when closed. Works after device reboot.
-            </div>
-          </div>
-        </div>
-
-        {/* Control Buttons */}
-        <div className="row mb-4">
-          <div className="col-md-6 mb-3 mb-md-0">
+          <div className="col-md-6 mb-3">
             <div className="card shadow-lg border-0 h-100">
               <div className="card-body d-flex flex-column justify-content-center">
                 <button
                   className={`btn btn-lg w-100 ${isTracking ? 'btn-danger' : 'btn-success'}`}
-                  onClick={() => isTracking ? handleStopTracking() : handleStartTracking()}
-                  style={{ borderRadius: '15px', padding: '20px', fontSize: '18px', fontWeight: 'bold' }}
+                  onClick={isTracking ? handleStopTracking : handleStartTracking}
+                  style={{ borderRadius: '15px', padding: '20px', fontWeight: 'bold' }}
                 >
-                  <i className={`bi ${isTracking ? 'bi-stop-circle-fill' : 'bi-play-circle-fill'} me-2`} style={{ fontSize: '24px' }}></i>
-                  {isTracking ? 'Stop Tracking' : 'Start Tracking'}
+                  <i className={`bi ${isTracking ? 'bi-stop-circle-fill' : 'bi-play-circle-fill'} me-2`}></i>
+                  {isTracking ? 'Stop' : 'Start'}
                 </button>
-                <div className="text-center mt-3 text-muted small">
-                  Every {interval} minute{interval !== 1 ? 's' : ''}
-                </div>
+                <div className="text-center mt-3 text-muted small">Every {interval} min</div>
               </div>
             </div>
           </div>
-
           <div className="col-md-6">
             <div className="card shadow-lg border-0 h-100">
               <div className="card-body d-flex flex-column justify-content-center">
@@ -529,14 +438,11 @@ export default function App() {
                   className="btn btn-lg btn-outline-danger w-100"
                   onClick={clearHistory}
                   disabled={history.length === 0}
-                  style={{ borderRadius: '15px', padding: '20px', fontSize: '18px', fontWeight: 'bold' }}
+                  style={{ borderRadius: '15px', padding: '20px', fontWeight: 'bold' }}
                 >
-                  <i className="bi bi-trash me-2" style={{ fontSize: '24px' }}></i>
-                  Clear History
+                  <i className="bi bi-trash me-2"></i>Clear
                 </button>
-                <div className="text-center mt-3 text-muted small">
-                  {history.length} records
-                </div>
+                <div className="text-center mt-3 text-muted small">{history.length} records</div>
               </div>
             </div>
           </div>
@@ -547,16 +453,13 @@ export default function App() {
           <div className="col-12">
             <div className="card shadow-lg border-0" style={{ background: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' }}>
               <div className="card-header border-0 text-white">
-                <h5 className="mb-0 fw-bold">
-                  <i className="bi bi-crosshair me-2"></i>
-                  Current Location
-                </h5>
+                <h5 className="mb-0 fw-bold"><i className="bi bi-crosshair me-2"></i>Current Location</h5>
               </div>
               <div className="card-body text-center bg-white">
                 {currentLocation ? (
                   <>
                     <div className="row">
-                      <div className="col-md-6 mb-3 mb-md-0">
+                      <div className="col-md-6 mb-3">
                         <h6 className="text-muted small">LATITUDE</h6>
                         <h2 className="fw-bold" style={{ color: '#4facfe' }}>{currentLocation.latitude.toFixed(6)}</h2>
                       </div>
@@ -567,17 +470,15 @@ export default function App() {
                     </div>
                     <hr />
                     <div className="text-muted">
-                      <i className="bi bi-clock me-2"></i>
-                      <strong>{currentLocation.timestamp}</strong>
+                      <i className="bi bi-clock me-2"></i><strong>{currentLocation.timestamp}</strong>
                       <span className="mx-2">•</span>
-                      <i className="bi bi-bullseye me-2"></i>
-                      {currentLocation.accuracy}m
+                      <i className="bi bi-bullseye me-2"></i>{currentLocation.accuracy}m
                     </div>
                   </>
                 ) : (
                   <div className="text-muted py-5">
                     <i className="bi bi-geo-alt display-1"></i>
-                    <p className="mt-3">Waiting for location...</p>
+                    <p className="mt-3">Waiting...</p>
                   </div>
                 )}
               </div>
@@ -589,18 +490,15 @@ export default function App() {
         <div className="row">
           <div className="col-12">
             <div className="card shadow-lg border-0">
-              <div className="card-header d-flex justify-content-between align-items-center" style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white' }}>
-                <h5 className="mb-0 fw-bold">
-                  <i className="bi bi-list-ul me-2"></i>
-                  Location History
-                </h5>
+              <div className="card-header d-flex justify-content-between" style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', color: 'white' }}>
+                <h5 className="mb-0 fw-bold"><i className="bi bi-list-ul me-2"></i>History</h5>
                 <span className="badge bg-light text-dark">{history.length}</span>
               </div>
               <div className="card-body p-0">
                 {history.length === 0 ? (
                   <div className="text-center text-muted py-5">
                     <i className="bi bi-inbox display-3"></i>
-                    <p className="mt-3">No data yet</p>
+                    <p className="mt-3">No data</p>
                   </div>
                 ) : (
                   <div className="table-responsive">
@@ -608,10 +506,10 @@ export default function App() {
                       <thead style={{ background: '#f8f9fa' }}>
                         <tr>
                           <th>#</th>
-                          <th><i className="bi bi-clock me-1"></i>Time (IST)</th>
-                          <th><i className="bi bi-geo-alt me-1"></i>Latitude</th>
-                          <th><i className="bi bi-geo-alt me-1"></i>Longitude</th>
-                          <th><i className="bi bi-bullseye me-1"></i>Accuracy</th>
+                          <th>Time (IST)</th>
+                          <th>Latitude</th>
+                          <th>Longitude</th>
+                          <th>Accuracy</th>
                         </tr>
                       </thead>
                       <tbody>
