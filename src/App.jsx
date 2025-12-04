@@ -222,28 +222,18 @@ export default function App() {
     };
   }, []);
 
-  // GPS Status Checker - improved
+  // GPS Status Checker - FIXED: Only check permissions, not position
   const startGPSChecker = () => {
     const checkGPS = async () => {
+      if (!isTracking) return; // Only check when tracking
+
       try {
         const permission = await Geolocation.checkPermissions();
-        if (permission.location === 'granted') {
-          // Try to get position to verify location services are on
-          try {
-            await Geolocation.getCurrentPosition({
-              timeout: 3000,
-              maximumAge: 10000
-            });
-            if (!gpsEnabled) {
-              logger.info('GPS', '✓ Location services enabled');
-              setGpsEnabled(true);
-            }
-          } catch (posError) {
-            // Position failed but permission granted = services disabled
-            if (gpsEnabled) {
-              logger.warn('GPS', '✗ Location services disabled');
-              setGpsEnabled(false);
-            }
+
+        if (permission.location === 'granted' || permission.location === 'granted-when-in-use') {
+          if (!gpsEnabled) {
+            logger.info('GPS', '✓ Permission granted');
+            setGpsEnabled(true);
           }
         } else {
           if (gpsEnabled) {
@@ -257,7 +247,7 @@ export default function App() {
     };
 
     checkGPS();
-    gpsCheckInterval.current = globalThis.setInterval(checkGPS, 15000); // Check every 15s
+    gpsCheckInterval.current = globalThis.setInterval(checkGPS, 30000); // Check every 30s
   };
 
   // Capture location function
@@ -281,7 +271,7 @@ export default function App() {
     try {
       const position = await Geolocation.getCurrentPosition({
         enableHighAccuracy: true,
-        timeout: 30000,
+        timeout: 60000, // Increased to 60s for slow GPS
         maximumAge: 0
       });
 
