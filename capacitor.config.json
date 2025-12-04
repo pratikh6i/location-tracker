@@ -1,6 +1,6 @@
 {
   "appId": "com.example.locationtracker",
-  "appName": "LocationTracker",
+  "appName": "Traceract",
   "webDir": "dist",
   "plugins": {
     "Geolocation": {

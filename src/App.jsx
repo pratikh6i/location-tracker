@@ -460,7 +460,7 @@ export default function App() {
             letterSpacing: '-0.5px'
           }}>
             <i className="bi bi-geo-alt-fill me-2"></i>
-            Location Tracker
+            Traceract
           </span>
           <div className="d-flex align-items-center gap-2">
             <span className={`badge fs-6 smooth-transition ${isTracking ? 'bg-success pulse-animation' : 'bg-secondary'}`}>
@@ -543,8 +543,8 @@ export default function App() {
                             <td style={{ width: '160px', fontSize: '9px', fontFamily: 'monospace' }}>{log.timestamp}</td>
                             <td style={{ width: '60px' }}>
                               <span className={`badge bg-${log.level === 'ERROR' ? 'danger' :
-                                  log.level === 'WARN' ? 'warning' :
-                                    log.level === 'INFO' ? 'info' : 'secondary'
+                                log.level === 'WARN' ? 'warning' :
+                                  log.level === 'INFO' ? 'info' : 'secondary'
                                 } small`}>{log.level}</span>
                             </td>
                             <td style={{ width: '80px', fontWeight: '600' }}>{log.category}</td>

@@ -179,7 +179,7 @@ public class LocationTrackerService extends Service implements LocationListener 
         );
         
         return new NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Location Tracker")
+            .setContentTitle("Traceract")
             .setContentText("Tracking your location")
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setContentIntent(pendingIntent)
