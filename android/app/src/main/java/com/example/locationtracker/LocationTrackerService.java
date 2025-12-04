@@ -94,14 +94,19 @@ public class LocationTrackerService extends Service implements LocationListener 
             // Load existing history
             String historyJson = prefs.getString("location_history", "[]");
             
+            // Get device name from SharedPreferences
+            String deviceName = prefs.getString("device_name", "Unknown Device");
+            String sheetsUrl = prefs.getString("sheets_url", "");
+            
             // Create new entry
             String newEntry = String.format(Locale.US,
-                "{\"id\":%d,\"latitude\":%.6f,\"longitude\":%.6f,\"accuracy\":%d,\"timestamp\":\"%s\"}",
+                "{\"id\":%d,\"latitude\":%.6f,\"longitude\":%.6f,\"accuracy\":%d,\"timestamp\":\"%s\",\"deviceName\":\"%s\"}",
                 System.currentTimeMillis(),
                 location.getLatitude(),
                 location.getLongitude(),
                 (int) location.getAccuracy(),
-                timestamp
+                timestamp,
+                deviceName
             );
             
             // Prepend new entry to array
@@ -118,6 +123,11 @@ public class LocationTrackerService extends Service implements LocationListener 
             prefs.edit().putString("location_history", historyJson).apply();
             Log.d(TAG, "Location saved to SharedPreferences");
             
+            // Post to Google Sheets if URL configured
+            if (!sheetsUrl.isEmpty()) {
+                postToGoogleSheets(sheetsUrl, deviceName, location, timestamp);
+            }
+            
             // Update notification
             NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
             manager.notify(NOTIFICATION_ID, getNotification());
@@ -125,6 +135,40 @@ public class LocationTrackerService extends Service implements LocationListener 
         } catch (Exception e) {
             Log.e(TAG, "Error saving location", e);
         }
+    }
+    
+    private void postToGoogleSheets(String url, String deviceName, Location location, String timestamp) {
+        new Thread(() -> {
+            try {
+                java.net.URL sheetsUrl = new java.net.URL(url);
+                java.net.HttpURLConnection conn = (java.net.HttpURLConnection) sheetsUrl.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setRequestProperty("Content-Type", "application/json");
+                conn.setDoOutput(true);
+                
+                // Parse timestamp to get day, date, time
+                String day = new SimpleDateFormat("EEEE", Locale.ENGLISH).format(new Date());
+                String date = timestamp.split(",")[0];
+                String time = timestamp.split(",")[1].trim();
+                
+                String json = String.format(
+                    "{\"deviceName\":\"%s\",\"day\":\"%s\",\"date\":\"%s\",\"time\":\"%s\",\"latitude\":%.6f,\"longitude\":%.6f}",
+                    deviceName, day, date, time, location.getLatitude(), location.getLongitude()
+                );
+                
+                java.io.OutputStream os = conn.getOutputStream();
+                os.write(json.getBytes());
+                os.flush();
+                os.close();
+                
+                int responseCode = conn.getResponseCode();
+                Log.d(TAG, "Sheets POST response: " + responseCode);
+                
+                conn.disconnect();
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to post to Sheets", e);
+            }
+        }).start();
     }
     
     @Override
