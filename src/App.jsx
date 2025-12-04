@@ -165,7 +165,7 @@ export default function App() {
   const [isTracking, setIsTracking] = useState(false);
   const [currentLocation, setCurrentLocation] = useState(null);
   const [history, setHistory] = useState([]);
-  const [interval, setInterval] = useState(5);
+  const [trackingInterval, setTrackingInterval] = useState(5);
   const [showSettings, setShowSettings] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [logs, setLogs] = useState([]);
@@ -189,7 +189,7 @@ export default function App() {
       const savedInterval = localStorage.getItem('tracking_interval');
       if (savedInterval) {
         const parsedInterval = parseInt(savedInterval);
-        setInterval(parsedInterval);
+        setTrackingInterval(parsedInterval);
         logger.info('SETTINGS', `Loaded interval: ${parsedInterval} min`);
       } else {
         logger.info('SETTINGS', 'Using default interval: 5 min');
@@ -222,27 +222,42 @@ export default function App() {
     };
   }, []);
 
-  // GPS Status Checker
+  // GPS Status Checker - improved
   const startGPSChecker = () => {
     const checkGPS = async () => {
       try {
-        await Geolocation.getCurrentPosition({ timeout: 5000 });
-        if (!gpsEnabled) {
-          logger.info('GPS', 'GPS enabled');
-          setGpsEnabled(true);
-        }
-      } catch (e) {
-        if (e.message.includes('location') || e.message.includes('denied')) {
+        const permission = await Geolocation.checkPermissions();
+        if (permission.location === 'granted') {
+          // Try to get position to verify location services are on
+          try {
+            await Geolocation.getCurrentPosition({
+              timeout: 3000,
+              maximumAge: 10000
+            });
+            if (!gpsEnabled) {
+              logger.info('GPS', '✓ Location services enabled');
+              setGpsEnabled(true);
+            }
+          } catch (posError) {
+            // Position failed but permission granted = services disabled
+            if (gpsEnabled) {
+              logger.warn('GPS', '✗ Location services disabled');
+              setGpsEnabled(false);
+            }
+          }
+        } else {
           if (gpsEnabled) {
-            logger.warn('GPS', 'GPS disabled');
+            logger.warn('GPS', '✗ Permission denied');
             setGpsEnabled(false);
           }
         }
+      } catch (e) {
+        logger.error('GPS', 'Check failed', e);
       }
     };
 
     checkGPS();
-    gpsCheckInterval.current = setInterval(checkGPS, 10000); // Check every 10s
+    gpsCheckInterval.current = globalThis.setInterval(checkGPS, 15000); // Check every 15s
   };
 
   // Capture location function
@@ -353,19 +368,20 @@ export default function App() {
     }
 
     // CRITICAL: Reload interval from storage EVERY time tracking starts
-    const currentInterval = parseInt(localStorage.getItem('tracking_interval') || '5');
-    setInterval(currentInterval);
+    const savedInterval = parseInt(localStorage.getItem('tracking_interval') || '5');
+    setTrackingInterval(savedInterval);
 
-    logger.info('TRACK', `▶ Tracking started (interval: ${currentInterval} min)`);
+    logger.info('TRACK', `▶ Tracking started (interval: ${savedInterval} min)`);
     localStorage.setItem('was_tracking', 'true');
 
     // Capture immediately
     captureLocation();
 
-    // Set up interval
-    const intervalMs = currentInterval * 60 * 1000;
-    intervalRef.current = setInterval(() => {
-      logger.info('TRACK', `⏰ Interval trigger (${currentInterval} min)`);
+    // Set up interval using globalThis to avoid collision
+    const intervalMs = savedInterval * 60 * 1000;
+    logger.debug('TRACK', `Setting interval: ${intervalMs}ms (${savedInterval} min)`);
+    intervalRef.current = globalThis.setInterval(() => {
+      logger.info('TRACK', `⏰ Interval trigger (${savedInterval} min)`);
       captureLocation();
     }, intervalMs);
 
@@ -423,7 +439,7 @@ export default function App() {
     const verified = localStorage.getItem('tracking_interval');
     if (verified === newInterval.toString()) {
       logger.info('SETTINGS', `✓ Interval saved and verified: ${newInterval} min`);
-      setInterval(newInterval);
+      setTrackingInterval(newInterval);
       setShowSettings(false);
 
       if (isTracking) {
@@ -580,8 +596,8 @@ export default function App() {
                   <select
                     className="form-select mb-3 smooth-transition"
                     style={{ borderRadius: '12px', fontSize: '15px', padding: '12px' }}
-                    value={interval}
-                    onChange={(e) => setInterval(parseInt(e.target.value))}
+                    value={trackingInterval}
+                    onChange={(e) => setTrackingInterval(parseInt(e.target.value))}
                   >
                     <option value={1}>Every 1 minute</option>
                     <option value={2}>Every 2 minutes</option>
@@ -596,7 +612,7 @@ export default function App() {
                     <button
                       className="btn btn-primary btn-press smooth-transition"
                       style={{ borderRadius: '12px', padding: '10px 24px' }}
-                      onClick={() => saveIntervalSetting(interval)}
+                      onClick={() => saveIntervalSetting(trackingInterval)}
                     >
                       <i className="bi bi-check-circle me-2"></i>
                       Save Changes
@@ -635,7 +651,7 @@ export default function App() {
                   {isTracking ? 'Stop Tracking' : 'Start Tracking'}
                 </button>
                 <div className="text-center mt-3 text-muted small fw-medium">
-                  Every {interval} minute{interval !== 1 ? 's' : ''}
+                  Every {trackingInterval} minute{trackingInterval !== 1 ? 's' : ''}
                 </div>
               </div>
             </div>
