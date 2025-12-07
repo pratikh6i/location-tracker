@@ -1,43 +1,48 @@
 /**
- * Google Apps Script for Traceract Location Tracking
+ * Google Apps Script for Traceract - Updated with Battery & Carrier
  * 
  * Setup Instructions:
- * 1. Open your Google Sheet
- * 2. Go to Extensions > Apps Script
- * 3. Delete any existing code
- * 4. Paste this entire script
- * 5. Click Deploy > New deployment
- * 6. Select type: Web app
- * 7. Execute as: Me
- * 8. Who has access: Anyone
- * 9. Click Deploy
- * 10. Copy the Web app URL
- * 11. Paste it in the Traceract app settings
+ * 1. Open: https://docs.google.com/spreadsheets/d/1zM47CKF5q3bAzTBylajNPvuz-9YSLvIw-8djtZtwXro/edit
+ * 2. Extensions > Apps Script
+ * 3. Delete existing code
+ * 4. Paste this script
+ * 5. Deploy > New deployment > Web app
+ * 6. Execute as: Me
+ * 7. Who has access: Anyone
+ * 8. Copy Web App URL
  */
 
 function doPost(e) {
     try {
-        // Get the active spreadsheet and first sheet
-        const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+        // Use lock to prevent concurrent writes
+        const lock = LockService.getScriptLock();
+        lock.waitLock(30000);
 
-        // Parse the incoming JSON data
+        const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
         const data = JSON.parse(e.postData.contents);
 
-        // Log for debugging (visible in Executions log)
-        Logger.log('Received data: ' + JSON.stringify(data));
+        // Validate required fields
+        if (!data.deviceName || !data.latitude || !data.longitude) {
+            throw new Error('Missing required fields: deviceName, latitude, or longitude');
+        }
 
-        // Append a new row with the data
-        // Column order: Device Name | Day | Date | Time | Latitude | Longitude
+        // Log for debugging
+        Logger.log('Received: ' + JSON.stringify(data));
+
+        // Column order: Device Name | Day | Date | Time | Latitude | Longitude | Battery | Carrier
         sheet.appendRow([
             data.deviceName || 'Unknown',
-            data.day || '',
-            data.date || '',
-            data.time || '',
-            data.latitude || '',
-            data.longitude || ''
+            data.day || new Date().toLocaleDateString('en-US', { weekday: 'long' }),
+            data.date || new Date().toLocaleDateString('en-IN'),
+            data.time || new Date().toLocaleTimeString('en-IN'),
+            data.latitude,
+            data.longitude,
+            data.battery !== undefined ? data.battery + '%' : 'N/A',
+            data.carrier || 'Unknown'
         ]);
 
-        // Return success response
+        lock.releaseLock();
+
         return ContentService
             .createTextOutput(JSON.stringify({
                 success: true,
@@ -47,8 +52,7 @@ function doPost(e) {
             .setMimeType(ContentService.MimeType.JSON);
 
     } catch (error) {
-        // Return error response
-        Logger.log('Error: ' + error.toString());
+        Logger.log('ERROR: ' + error.toString());
         return ContentService
             .createTextOutput(JSON.stringify({
                 success: false,
@@ -58,7 +62,7 @@ function doPost(e) {
     }
 }
 
-// Test function to verify the script works
+// Test endpoint
 function doGet(e) {
     return ContentService
         .createTextOutput('Traceract Location Tracker API is running. Use POST to submit data.')
