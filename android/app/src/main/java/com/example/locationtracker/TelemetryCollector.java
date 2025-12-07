@@ -127,7 +127,7 @@ public class TelemetryCollector {
             if (wm != null && wm.isWifiEnabled()) {
                 WifiInfo info = wm.getConnectionInfo();
                 if (info != null) {
-                    String ssid = info.get SSID();
+                    String ssid = info.getSSID();
                     return (ssid != null && !ssid.equals("<unknown ssid>")) 
                         ? ssid.replace("\"", "") : "Not connected";
                 }
