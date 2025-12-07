@@ -50,18 +50,8 @@ function App() {
       setIsTracking(true);
       addLog('Tracking started');
 
-      // Start native service
-      try {
-        await LocationService.startService();
-        addLog('Native service started');
-      } catch (e) {
-        addLog('Service error: ' + e.message);
-      }
-
-      // Capture first location
+      // Start tracking interval
       captureLocation();
-
-      // Set interval
       window.trackingInterval = setInterval(captureLocation, 60000); // 1 min
 
     } catch (e) {
@@ -73,12 +63,6 @@ function App() {
     clearInterval(window.trackingInterval);
     setIsTracking(false);
     addLog('Tracking stopped');
-
-    try {
-      await LocationService.stopService();
-    } catch (e) {
-      addLog('Stop service error: ' + e.message);
-    }
   };
 
   const captureLocation = async () => {

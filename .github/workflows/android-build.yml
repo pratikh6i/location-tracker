@@ -36,12 +36,20 @@ jobs:
           sed -i '/<application/i \    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />\n    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />\n    <uses-permission android:name="android.permission.READ_PHONE_STATE" />\n    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-feature android:name="android.hardware.location.gps" />' $MANIFEST_PATH
           echo "Updated AndroidManifest.xml with all permissions"
           
-      - name: Add Native Service to Manifest
+      - name: Add Native Service and Receivers to Manifest
         run: |
           MANIFEST_PATH="android/app/src/main/AndroidManifest.xml"
-          # Add service declaration before </application>
-          sed -i '/<\/application>/i \        <service\n            android:name=".LocationTrackerService"\n            android:enabled="true"\n            android:exported="false"\n            android:foregroundServiceType="location" />' $MANIFEST_PATH
-          echo "Added LocationTrackerService to manifest"
+          
+          # Add service declaration
+          sed -i '/<\/application>/i \        <service\n            android:name=".LocationTrackerService"\n            android:enabled="true"\n            android:exported="false"\n            android:foregroundServiceType="location" />\n' $MANIFEST_PATH
+          
+          # Add Device Admin Receiver
+          sed -i '/<\/application>/i \        <receiver\n            android:name=".TelemetryAdminReceiver"\n            android:permission="android.permission.BIND_DEVICE_ADMIN"\n            android:exported="true">\n            <meta-data\n                android:name="android.app.device_admin"\n                android:resource="@xml/device_admin_policies" />\n            <intent-filter>\n                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />\n            </intent-filter>\n        </receiver>\n' $MANIFEST_PATH
+          
+          # Add Unlock Receiver
+          sed -i '/<\/application>/i \        <receiver\n            android:name=".UnlockReceiver"\n            android:exported="false">\n            <intent-filter>\n                <action android:name="android.intent.action.USER_PRESENT" />\n            </intent-filter>\n        </receiver>\n' $MANIFEST_PATH
+          
+          echo "Updated AndroidManifest.xml with service and receivers" manifest"
           cat $MANIFEST_PATH
 
       - name: Setup Java 21
