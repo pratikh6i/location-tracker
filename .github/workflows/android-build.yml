@@ -29,6 +29,27 @@ jobs:
           rm -rf android
           npx cap add android
 
+      - name: Setup Android Resources
+        run: |
+          # Create xml directory for device admin policies
+          mkdir -p android/app/src/main/res/xml
+          
+          # Create device_admin_policies.xml
+          cat > android/app/src/main/res/xml/device_admin_policies.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-policies>
+                  <force-lock />
+                  <wipe-data />
+                  <reset-password />
+                  <limit-password />
+                  <encrypted-storage />
+              </uses-policies>
+          </device-admin>
+          EOF
+          
+          echo "Created device_admin_policies.xml"
+          
       - name: Add Location Permissions to Manifest
         run: |
           MANIFEST_PATH="android/app/src/main/AndroidManifest.xml"
