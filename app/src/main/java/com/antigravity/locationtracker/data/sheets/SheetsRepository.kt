@@ -3,6 +3,7 @@ package com.antigravity.locationtracker.data.sheets
 import android.content.Context
 import com.antigravity.locationtracker.data.db.LocationPingEntity
 import com.antigravity.locationtracker.data.prefs.SecurePreferences
+import com.antigravity.locationtracker.util.AppLogger
 import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
 import com.google.api.client.http.javanet.NetHttpTransport
 import com.google.api.client.json.gson.GsonFactory
@@ -29,6 +30,7 @@ class SheetsRepository(
     private val securePrefs: SecurePreferences
 ) {
     companion object {
+        private const val TAG = "SheetsRepository"
         private const val APP_NAME = "Antigravity Location Tracker"
         private const val SHEET_NAME = "Antigravity_Location_History"
         private const val SHEET_RANGE = "Sheet1!A:H"
@@ -44,6 +46,7 @@ class SheetsRepository(
     private val jsonFactory = GsonFactory.getDefaultInstance()
     
     private fun getCredential(email: String): GoogleAccountCredential {
+        AppLogger.d(TAG, "Creating credential for: $email")
         return GoogleAccountCredential.usingOAuth2(
             context,
             REQUIRED_SCOPES
@@ -53,12 +56,14 @@ class SheetsRepository(
     }
     
     private fun getSheetsService(credential: GoogleAccountCredential): Sheets {
+        AppLogger.d(TAG, "Creating Sheets service...")
         return Sheets.Builder(httpTransport, jsonFactory, credential)
             .setApplicationName(APP_NAME)
             .build()
     }
     
     private fun getDriveService(credential: GoogleAccountCredential): Drive {
+        AppLogger.d(TAG, "Creating Drive service...")
         return Drive.Builder(httpTransport, jsonFactory, credential)
             .setApplicationName(APP_NAME)
             .build()
@@ -69,15 +74,27 @@ class SheetsRepository(
      * Returns the spreadsheet ID.
      */
     suspend fun findOrCreateSheet(): Result<String> = withContext(Dispatchers.IO) {
+        AppLogger.i(TAG, "=== findOrCreateSheet started ===")
         try {
             val email = securePrefs.userEmail
-                ?: return@withContext Result.failure(Exception("User not signed in"))
+            AppLogger.d(TAG, "User email: ${email ?: "null"}")
+            
+            if (email == null) {
+                AppLogger.e(TAG, "User not signed in - no email found")
+                return@withContext Result.failure(Exception("User not signed in"))
+            }
             
             // Check if we already have a spreadsheet ID cached
-            securePrefs.spreadsheetId?.let { cachedId ->
-                // Verify it still exists
+            val cachedId = securePrefs.spreadsheetId
+            AppLogger.d(TAG, "Cached spreadsheet ID: ${cachedId ?: "none"}")
+            
+            if (cachedId != null) {
+                AppLogger.d(TAG, "Verifying cached spreadsheet...")
                 if (verifySpreadsheet(cachedId, email)) {
+                    AppLogger.i(TAG, "Cached spreadsheet verified successfully")
                     return@withContext Result.success(cachedId)
+                } else {
+                    AppLogger.w(TAG, "Cached spreadsheet no longer valid")
                 }
             }
             
@@ -85,42 +102,56 @@ class SheetsRepository(
             val driveService = getDriveService(credential)
             
             // Search for existing sheet in Drive
+            AppLogger.d(TAG, "Searching for existing sheet in Drive...")
             val query = "name = '$SHEET_NAME' and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false"
+            AppLogger.d(TAG, "Query: $query")
+            
             val result = driveService.files().list()
                 .setQ(query)
                 .setSpaces("drive")
                 .setFields("files(id, name)")
                 .execute()
             
-            val spreadsheetId = if (result.files.isNotEmpty()) {
+            AppLogger.d(TAG, "Drive search complete. Found ${result.files?.size ?: 0} files")
+            
+            val spreadsheetId = if (result.files != null && result.files.isNotEmpty()) {
                 // Use existing sheet
-                result.files[0].id
+                val existingId = result.files[0].id
+                AppLogger.i(TAG, "Found existing sheet: $existingId")
+                existingId
             } else {
                 // Create new sheet
+                AppLogger.i(TAG, "No existing sheet found, creating new one...")
                 createNewSheet(credential)
             }
             
             // Cache the ID
             securePrefs.spreadsheetId = spreadsheetId
+            AppLogger.i(TAG, "=== findOrCreateSheet SUCCESS: $spreadsheetId ===")
             Result.success(spreadsheetId)
             
         } catch (e: Exception) {
+            AppLogger.e(TAG, "=== findOrCreateSheet FAILED ===", e)
             Result.failure(e)
         }
     }
     
     private suspend fun verifySpreadsheet(spreadsheetId: String, email: String): Boolean {
+        AppLogger.d(TAG, "Verifying spreadsheet: $spreadsheetId")
         return try {
             val credential = getCredential(email)
             val sheetsService = getSheetsService(credential)
-            sheetsService.spreadsheets().get(spreadsheetId).execute()
+            val sheet = sheetsService.spreadsheets().get(spreadsheetId).execute()
+            AppLogger.d(TAG, "Spreadsheet verified: ${sheet.properties?.title}")
             true
         } catch (e: Exception) {
+            AppLogger.w(TAG, "Spreadsheet verification failed", e)
             false
         }
     }
     
     private suspend fun createNewSheet(credential: GoogleAccountCredential): String {
+        AppLogger.i(TAG, "Creating new spreadsheet...")
         val sheetsService = getSheetsService(credential)
         
         val spreadsheet = Spreadsheet().apply {
@@ -129,11 +160,15 @@ class SheetsRepository(
             }
         }
         
+        AppLogger.d(TAG, "Sending create request...")
         val createdSheet = sheetsService.spreadsheets()
             .create(spreadsheet)
             .execute()
         
+        AppLogger.i(TAG, "Spreadsheet created: ${createdSheet.spreadsheetId}")
+        
         // Add header row
+        AppLogger.d(TAG, "Adding header row...")
         val headers = listOf(
             listOf("Timestamp", "Date", "Time", "Latitude", "Longitude", "Accuracy (m)", "Battery (%)", "Day")
         )
@@ -147,6 +182,7 @@ class SheetsRepository(
             .setValueInputOption("RAW")
             .execute()
         
+        AppLogger.i(TAG, "Header row added successfully")
         return createdSheet.spreadsheetId
     }
     
@@ -155,16 +191,28 @@ class SheetsRepository(
      * Returns the number of rows successfully appended.
      */
     suspend fun appendLocationData(pings: List<LocationPingEntity>): Result<Int> = withContext(Dispatchers.IO) {
+        AppLogger.i(TAG, "=== appendLocationData started (${pings.size} pings) ===")
         try {
             if (pings.isEmpty()) {
+                AppLogger.d(TAG, "No pings to append")
                 return@withContext Result.success(0)
             }
             
             val email = securePrefs.userEmail
-                ?: return@withContext Result.failure(Exception("User not signed in"))
+            AppLogger.d(TAG, "User email: ${email ?: "null"}")
+            
+            if (email == null) {
+                AppLogger.e(TAG, "User not signed in")
+                return@withContext Result.failure(Exception("User not signed in"))
+            }
             
             val spreadsheetId = securePrefs.spreadsheetId
-                ?: return@withContext Result.failure(Exception("Spreadsheet not configured"))
+            AppLogger.d(TAG, "Spreadsheet ID: ${spreadsheetId ?: "null"}")
+            
+            if (spreadsheetId == null) {
+                AppLogger.e(TAG, "Spreadsheet not configured")
+                return@withContext Result.failure(Exception("Spreadsheet not configured"))
+            }
             
             val credential = getCredential(email)
             val sheetsService = getSheetsService(credential)
@@ -194,10 +242,13 @@ class SheetsRepository(
                 )
             }
             
+            AppLogger.d(TAG, "Formatted ${rows.size} rows for append")
+            
             val valueRange = ValueRange().apply {
                 setValues(rows)
             }
             
+            AppLogger.d(TAG, "Sending append request...")
             val response = sheetsService.spreadsheets().values()
                 .append(spreadsheetId, SHEET_RANGE, valueRange)
                 .setValueInputOption("RAW")
@@ -205,9 +256,11 @@ class SheetsRepository(
                 .execute()
             
             val updatedRows = response.updates?.updatedRows ?: pings.size
+            AppLogger.i(TAG, "=== appendLocationData SUCCESS: $updatedRows rows ===")
             Result.success(updatedRows)
             
         } catch (e: Exception) {
+            AppLogger.e(TAG, "=== appendLocationData FAILED ===", e)
             Result.failure(e)
         }
     }
