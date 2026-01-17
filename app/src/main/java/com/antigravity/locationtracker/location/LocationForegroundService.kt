@@ -1,0 +1,273 @@
+package com.antigravity.locationtracker.location
+
+import android.Manifest
+import android.app.Notification
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
+import android.os.BatteryManager
+import android.os.Build
+import android.os.IBinder
+import android.os.Looper
+import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
+import androidx.work.Constraints
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import com.antigravity.locationtracker.AntigravityApp
+import com.antigravity.locationtracker.MainActivity
+import com.antigravity.locationtracker.R
+import com.antigravity.locationtracker.data.db.AppDatabase
+import com.antigravity.locationtracker.data.db.LocationPingEntity
+import com.antigravity.locationtracker.data.prefs.SecurePreferences
+import com.antigravity.locationtracker.sync.SyncWorker
+import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import java.util.concurrent.TimeUnit
+
+/**
+ * Foreground service for continuous location tracking.
+ * Uses FusedLocationProvider for efficient, battery-optimized location updates.
+ */
+class LocationForegroundService : Service() {
+    
+    companion object {
+        private const val TAG = "LocationService"
+        private const val NOTIFICATION_ID = 1001
+        
+        // Location update interval: 5 minutes
+        private const val LOCATION_INTERVAL_MS = 5 * 60 * 1000L
+        private const val LOCATION_FASTEST_INTERVAL_MS = 2 * 60 * 1000L
+        
+        // Work names
+        private const val SYNC_WORK_NAME = "location_sync_work"
+        
+        @Volatile
+        private var isRunning = false
+        
+        fun isServiceRunning(): Boolean = isRunning
+        
+        fun start(context: Context) {
+            val intent = Intent(context, LocationForegroundService::class.java)
+            ContextCompat.startForegroundService(context, intent)
+        }
+        
+        fun stop(context: Context) {
+            val intent = Intent(context, LocationForegroundService::class.java)
+            context.stopService(intent)
+        }
+    }
+    
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    
+    private lateinit var fusedLocationClient: FusedLocationProviderClient
+    private lateinit var locationCallback: LocationCallback
+    private lateinit var securePrefs: SecurePreferences
+    private lateinit var database: AppDatabase
+    
+    override fun onCreate() {
+        super.onCreate()
+        Log.i(TAG, "Service created")
+        
+        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
+        securePrefs = SecurePreferences(this)
+        database = AppDatabase.getInstance(this)
+        
+        setupLocationCallback()
+        isRunning = true
+    }
+    
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.i(TAG, "Service started")
+        
+        // Start as foreground service
+        val notification = createNotification("Tracking active")
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+        
+        // Start location updates
+        startLocationUpdates()
+        
+        // Schedule sync worker
+        scheduleSyncWorker()
+        
+        // Mark service as enabled
+        securePrefs.isServiceEnabled = true
+        
+        return START_STICKY
+    }
+    
+    private fun setupLocationCallback() {
+        locationCallback = object : LocationCallback() {
+            override fun onLocationResult(result: LocationResult) {
+                result.lastLocation?.let { location ->
+                    Log.i(TAG, "Location received: ${location.latitude}, ${location.longitude}")
+                    
+                    serviceScope.launch {
+                        saveLocation(
+                            latitude = location.latitude,
+                            longitude = location.longitude,
+                            accuracy = location.accuracy,
+                            altitude = if (location.hasAltitude()) location.altitude else null,
+                            speed = if (location.hasSpeed()) location.speed else null
+                        )
+                    }
+                    
+                    // Update notification with latest location
+                    val notificationText = String.format(
+                        "%.4f, %.4f • Battery: %d%%",
+                        location.latitude,
+                        location.longitude,
+                        getBatteryLevel()
+                    )
+                    updateNotification(notificationText)
+                }
+            }
+        }
+    }
+    
+    private fun startLocationUpdates() {
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.e(TAG, "Location permission not granted")
+            stopSelf()
+            return
+        }
+        
+        val locationRequest = LocationRequest.Builder(
+            Priority.PRIORITY_HIGH_ACCURACY,
+            LOCATION_INTERVAL_MS
+        )
+            .setMinUpdateIntervalMillis(LOCATION_FASTEST_INTERVAL_MS)
+            .setWaitForAccurateLocation(true)
+            .build()
+        
+        try {
+            fusedLocationClient.requestLocationUpdates(
+                locationRequest,
+                locationCallback,
+                Looper.getMainLooper()
+            )
+            Log.i(TAG, "Location updates started - interval: ${LOCATION_INTERVAL_MS / 1000}s")
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Failed to start location updates", e)
+            stopSelf()
+        }
+    }
+    
+    private suspend fun saveLocation(
+        latitude: Double,
+        longitude: Double,
+        accuracy: Float,
+        altitude: Double?,
+        speed: Float?
+    ) {
+        val ping = LocationPingEntity(
+            latitude = latitude,
+            longitude = longitude,
+            accuracy = accuracy,
+            altitude = altitude,
+            speed = speed,
+            timestamp = System.currentTimeMillis(),
+            batteryLevel = getBatteryLevel()
+        )
+        
+        database.locationPingDao().insert(ping)
+        securePrefs.lastLocationTime = System.currentTimeMillis()
+        
+        Log.i(TAG, "Location saved to database")
+    }
+    
+    private fun getBatteryLevel(): Int {
+        val batteryManager = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+        return batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+    }
+    
+    private fun scheduleSyncWorker() {
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+        
+        val syncRequest = PeriodicWorkRequestBuilder<SyncWorker>(
+            15, TimeUnit.MINUTES // Minimum interval for periodic work
+        )
+            .setConstraints(constraints)
+            .build()
+        
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            SYNC_WORK_NAME,
+            ExistingPeriodicWorkPolicy.KEEP,
+            syncRequest
+        )
+        
+        Log.i(TAG, "Sync worker scheduled")
+    }
+    
+    private fun createNotification(text: String): Notification {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+        
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        
+        return NotificationCompat.Builder(this, AntigravityApp.NOTIFICATION_CHANNEL_ID)
+            .setContentTitle(getString(R.string.notification_title))
+            .setContentText(text)
+            .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .build()
+    }
+    
+    private fun updateNotification(text: String) {
+        val notification = createNotification(text)
+        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
+        notificationManager.notify(NOTIFICATION_ID, notification)
+    }
+    
+    override fun onDestroy() {
+        super.onDestroy()
+        Log.i(TAG, "Service destroyed")
+        
+        fusedLocationClient.removeLocationUpdates(locationCallback)
+        isRunning = false
+        securePrefs.isServiceEnabled = false
+    }
+    
+    override fun onBind(intent: Intent?): IBinder? = null
+}

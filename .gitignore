@@ -1,24 +1,65 @@
-# Logs
-logs
+# Built application files
+*.apk
+*.ap_
+*.aab
+
+# Files for the ART/Dalvik VM
+*.dex
+
+# Java class files
+*.class
+
+# Generated files
+bin/
+gen/
+out/
+
+# Gradle files
+.gradle/
+build/
+*.hprof
+
+# Local configuration file (sdk path, etc)
+local.properties
+
+# Android Studio
+*.iml
+.idea/
+.navigation/
+captures/
+.externalNativeBuild/
+.cxx/
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
+# Keystore files (don't commit to repo!)
+*.jks
+*.keystore
+keystore.properties
 
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
+# macOS
 .DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# IntelliJ
+*.iws
+/out/
+
+# NDK
+obj/
+
+# Proguard
+proguard/
+
+# Testing
+.test/
+coverage/
+
+# Secrets
+secrets.properties
+google-services.json
