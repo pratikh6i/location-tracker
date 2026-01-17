@@ -39,7 +39,7 @@ jobs:
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug.apk
+          name: app-debug
           path: app/build/outputs/apk/debug/app-debug.apk
 
   release:
@@ -68,33 +68,33 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Decode Keystore
-        if: ${{ env.KEYSTORE_BASE64 != '' }}
-        env:
-          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+      - name: Generate Signing Keystore
         run: |
-          echo "$KEYSTORE_BASE64" | base64 -d > keystore.jks
-          echo "KEYSTORE_FILE=$(pwd)/keystore.jks" >> $GITHUB_ENV
+          keytool -genkey -v \
+            -keystore release.keystore \
+            -storepass android123 \
+            -alias release \
+            -keypass android123 \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Antigravity,OU=Location,O=Antigravity,L=Mumbai,ST=Maharashtra,C=IN"
+          
+          # Print the SHA-1 for OAuth client configuration
+          echo "=== KEYSTORE SHA-1 (Update this in Google Cloud Console) ==="
+          keytool -keystore release.keystore -list -v -storepass android123 | grep SHA1
 
-      - name: Build Release APK
-        env:
-          KEYSTORE_FILE: ${{ env.KEYSTORE_FILE }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+      - name: Build Signed Release APK
         run: |
-          if [ -n "$KEYSTORE_FILE" ]; then
-            ./gradlew assembleRelease
-          else
-            echo "No signing config provided, building unsigned release"
-            ./gradlew assembleRelease
-          fi
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file=$(pwd)/release.keystore \
+            -Pandroid.injected.signing.store.password=android123 \
+            -Pandroid.injected.signing.key.alias=release \
+            -Pandroid.injected.signing.key.password=android123
 
-      - name: Upload Release APK
+      - name: Upload Signed Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-release.apk
-          path: |
-            app/build/outputs/apk/release/app-release.apk
-            app/build/outputs/apk/release/app-release-unsigned.apk
+          name: app-release-signed
+          path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: warn

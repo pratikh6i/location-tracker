@@ -22,6 +22,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -36,7 +37,6 @@ import com.antigravity.locationtracker.ui.theme.AppTypography
 import com.antigravity.locationtracker.ui.theme.DeepCharcoal
 import com.antigravity.locationtracker.ui.theme.LightMint
 import com.antigravity.locationtracker.ui.theme.MintGreen
-import com.antigravity.locationtracker.ui.theme.PaleBlue
 import com.antigravity.locationtracker.ui.theme.SoftWhite
 import com.antigravity.locationtracker.ui.theme.WarmGray
 
@@ -48,7 +48,8 @@ import com.antigravity.locationtracker.ui.theme.WarmGray
 fun AuthScreen(
     isLoading: Boolean,
     errorMessage: String?,
-    onSignInClick: () -> Unit
+    onSignInClick: () -> Unit,
+    onShareLogsClick: () -> Unit = {}
 ) {
     Box(
         modifier = Modifier
@@ -150,6 +151,23 @@ fun AuthScreen(
                 color = WarmGray,
                 textAlign = TextAlign.Center
             )
+            
+            Spacer(modifier = Modifier.height(32.dp))
+            
+            // Share Logs button
+            OutlinedButton(
+                onClick = onShareLogsClick,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text(
+                    text = "📋 Share Debug Logs",
+                    style = AppTypography.bodyMedium,
+                    color = WarmGray
+                )
+            }
         }
     }
 }

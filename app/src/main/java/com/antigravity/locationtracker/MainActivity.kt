@@ -1,6 +1,5 @@
 package com.antigravity.locationtracker
 
-import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -10,7 +9,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -28,7 +26,7 @@ import com.antigravity.locationtracker.ui.screens.AuthScreen
 import com.antigravity.locationtracker.ui.screens.SetupScreen
 import com.antigravity.locationtracker.ui.theme.AntigravityTheme
 import com.antigravity.locationtracker.ui.theme.SoftWhite
-import kotlinx.coroutines.flow.collectLatest
+import com.antigravity.locationtracker.util.AppLogger
 import kotlinx.coroutines.launch
 
 /**
@@ -36,6 +34,10 @@ import kotlinx.coroutines.launch
  * Manages navigation between Auth, Setup, and Active screens.
  */
 class MainActivity : ComponentActivity() {
+    
+    companion object {
+        private const val TAG = "MainActivity"
+    }
     
     private lateinit var authManager: GoogleAuthManager
     private lateinit var securePrefs: SecurePreferences
@@ -45,6 +47,7 @@ class MainActivity : ComponentActivity() {
     private val signInLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
+        AppLogger.i(TAG, "Sign-in result received: resultCode=${result.resultCode}")
         authManager.handleSignInResult(result.data)
     }
     
@@ -52,11 +55,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         
+        AppLogger.i(TAG, "=== App Started ===")
+        AppLogger.i(TAG, "onCreate called")
+        
         // Initialize dependencies
         securePrefs = SecurePreferences(this)
         authManager = GoogleAuthManager(this, securePrefs)
         sheetsRepository = SheetsRepository(this, securePrefs)
         database = AppDatabase.getInstance(this)
+        
+        AppLogger.d(TAG, "Dependencies initialized")
         
         // Check existing sign-in
         lifecycleScope.launch {
@@ -82,40 +90,54 @@ class MainActivity : ComponentActivity() {
                     val lastSyncTime by database.locationPingDao().getLastSyncTimeFlow().collectAsState(initial = null)
                     val latestPing by database.locationPingDao().getLatestFlow().collectAsState(initial = null)
                     
+                    // Share logs function
+                    val shareLogs = {
+                        AppLogger.i(TAG, "User requested to share logs")
+                        AppLogger.shareLogFile(this@MainActivity)
+                    }
+                    
                     // Determine which screen to show
                     when (val state = authState) {
                         is AuthState.Loading -> {
-                            // Show loading in AuthScreen
+                            AppLogger.d(TAG, "Showing Loading state")
                             AuthScreen(
                                 isLoading = true,
                                 errorMessage = null,
-                                onSignInClick = {}
+                                onSignInClick = {},
+                                onShareLogsClick = shareLogs
                             )
                         }
                         
                         is AuthState.SignedOut -> {
+                            AppLogger.d(TAG, "Showing SignedOut state")
                             AuthScreen(
                                 isLoading = false,
                                 errorMessage = errorMessage,
                                 onSignInClick = {
+                                    AppLogger.i(TAG, "User clicked Sign In")
                                     errorMessage = null
                                     signInLauncher.launch(authManager.getSignInIntent())
-                                }
+                                },
+                                onShareLogsClick = shareLogs
                             )
                         }
                         
                         is AuthState.Error -> {
+                            AppLogger.w(TAG, "Showing Error state: ${state.message}")
                             AuthScreen(
                                 isLoading = false,
                                 errorMessage = state.message,
                                 onSignInClick = {
+                                    AppLogger.i(TAG, "User clicked Sign In (after error)")
                                     errorMessage = null
                                     signInLauncher.launch(authManager.getSignInIntent())
-                                }
+                                },
+                                onShareLogsClick = shareLogs
                             )
                         }
                         
                         is AuthState.SignedIn -> {
+                            AppLogger.d(TAG, "Showing SignedIn state for: ${state.email}")
                             if (!securePrefs.isSetupComplete) {
                                 // Need to complete setup
                                 SetupScreen(
@@ -123,12 +145,14 @@ class MainActivity : ComponentActivity() {
                                     sheetCreated = sheetCreated,
                                     onSetupComplete = {
                                         scope.launch {
+                                            AppLogger.i(TAG, "Setup completing...")
                                             // Create or find sheet if not done
                                             if (!sheetCreated) {
                                                 isCreatingSheet = true
                                                 val result = sheetsRepository.findOrCreateSheet()
                                                 isCreatingSheet = false
                                                 sheetCreated = result.isSuccess
+                                                AppLogger.i(TAG, "Sheet creation result: ${result.isSuccess}")
                                             }
                                             
                                             if (sheetCreated) {
@@ -136,6 +160,7 @@ class MainActivity : ComponentActivity() {
                                                 securePrefs.isSetupComplete = true
                                                 
                                                 // Start location service
+                                                AppLogger.i(TAG, "Starting location service...")
                                                 LocationForegroundService.start(this@MainActivity)
                                             }
                                         }
@@ -145,10 +170,14 @@ class MainActivity : ComponentActivity() {
                                 // Trigger sheet creation when entering setup
                                 if (!sheetCreated && !isCreatingSheet) {
                                     scope.launch {
+                                        AppLogger.i(TAG, "Creating sheet on setup enter...")
                                         isCreatingSheet = true
                                         val result = sheetsRepository.findOrCreateSheet()
                                         isCreatingSheet = false
                                         sheetCreated = result.isSuccess
+                                        if (result.isFailure) {
+                                            AppLogger.e(TAG, "Sheet creation failed", result.exceptionOrNull())
+                                        }
                                     }
                                 }
                             } else {
@@ -163,6 +192,7 @@ class MainActivity : ComponentActivity() {
                                 
                                 // Ensure service is running
                                 if (!LocationForegroundService.isServiceRunning()) {
+                                    AppLogger.i(TAG, "Service not running, starting...")
                                     LocationForegroundService.start(this@MainActivity)
                                 }
                             }
