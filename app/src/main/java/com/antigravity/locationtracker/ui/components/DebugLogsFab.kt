@@ -1,14 +1,14 @@
 package com.antigravity.locationtracker.ui.components
 
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Download
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.antigravity.locationtracker.ui.theme.MintGreen
 import com.antigravity.locationtracker.ui.theme.DeepCharcoal
 
@@ -25,12 +25,13 @@ fun DebugLogsFab(
         onClick = onClick,
         modifier = modifier.padding(16.dp),
         containerColor = MintGreen,
-        contentColor = DeepCharcoal
+        contentColor = DeepCharcoal,
+        shape = CircleShape
     ) {
-        Icon(
-            imageVector = Icons.Default.Download,
-            contentDescription = "Download Logs",
-            modifier = Modifier.size(24.dp)
+        Text(
+            text = "📋",
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Bold
         )
     }
 }
