@@ -9,4 +9,5 @@
     <color name="success_green">#FF10B981</color>
     <color name="muted_red">#FFEF4444</color>
     <color name="light_mint">#FFE8F5F0</color>
+    <color name="ic_launcher_background">#FFB8E5D4</color>
 </resources>
