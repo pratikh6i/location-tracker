@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.collectAsState
@@ -13,6 +14,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.lifecycleScope
 import com.antigravity.locationtracker.auth.AuthState
@@ -21,6 +23,7 @@ import com.antigravity.locationtracker.data.db.AppDatabase
 import com.antigravity.locationtracker.data.prefs.SecurePreferences
 import com.antigravity.locationtracker.data.sheets.SheetsRepository
 import com.antigravity.locationtracker.location.LocationForegroundService
+import com.antigravity.locationtracker.ui.components.DebugLogsFab
 import com.antigravity.locationtracker.ui.screens.ActiveScreen
 import com.antigravity.locationtracker.ui.screens.AuthScreen
 import com.antigravity.locationtracker.ui.screens.SetupScreen
@@ -90,113 +93,122 @@ class MainActivity : ComponentActivity() {
                     val lastSyncTime by database.locationPingDao().getLastSyncTimeFlow().collectAsState(initial = null)
                     val latestPing by database.locationPingDao().getLatestFlow().collectAsState(initial = null)
                     
-                    // Share logs function
-                    val shareLogs = {
-                        AppLogger.i(TAG, "User requested to share logs")
-                        AppLogger.shareLogFile(this@MainActivity)
+                    // Download logs function
+                    val downloadLogs = {
+                        AppLogger.i(TAG, "User requested to download logs")
+                        AppLogger.saveAndNotify(this@MainActivity)
                     }
                     
-                    // Determine which screen to show
-                    when (val state = authState) {
-                        is AuthState.Loading -> {
-                            AppLogger.d(TAG, "Showing Loading state")
-                            AuthScreen(
-                                isLoading = true,
-                                errorMessage = null,
-                                onSignInClick = {},
-                                onShareLogsClick = shareLogs
-                            )
-                        }
-                        
-                        is AuthState.SignedOut -> {
-                            AppLogger.d(TAG, "Showing SignedOut state")
-                            AuthScreen(
-                                isLoading = false,
-                                errorMessage = errorMessage,
-                                onSignInClick = {
-                                    AppLogger.i(TAG, "User clicked Sign In")
-                                    errorMessage = null
-                                    signInLauncher.launch(authManager.getSignInIntent())
-                                },
-                                onShareLogsClick = shareLogs
-                            )
-                        }
-                        
-                        is AuthState.Error -> {
-                            AppLogger.w(TAG, "Showing Error state: ${state.message}")
-                            AuthScreen(
-                                isLoading = false,
-                                errorMessage = state.message,
-                                onSignInClick = {
-                                    AppLogger.i(TAG, "User clicked Sign In (after error)")
-                                    errorMessage = null
-                                    signInLauncher.launch(authManager.getSignInIntent())
-                                },
-                                onShareLogsClick = shareLogs
-                            )
-                        }
-                        
-                        is AuthState.SignedIn -> {
-                            AppLogger.d(TAG, "Showing SignedIn state for: ${state.email}")
-                            if (!securePrefs.isSetupComplete) {
-                                // Need to complete setup
-                                SetupScreen(
-                                    isCreatingSheet = isCreatingSheet,
-                                    sheetCreated = sheetCreated,
-                                    onSetupComplete = {
-                                        scope.launch {
-                                            AppLogger.i(TAG, "Setup completing...")
-                                            // Create or find sheet if not done
-                                            if (!sheetCreated) {
-                                                isCreatingSheet = true
-                                                val result = sheetsRepository.findOrCreateSheet()
-                                                isCreatingSheet = false
-                                                sheetCreated = result.isSuccess
-                                                AppLogger.i(TAG, "Sheet creation result: ${result.isSuccess}")
-                                            }
-                                            
-                                            if (sheetCreated) {
-                                                // Mark setup complete
-                                                securePrefs.isSetupComplete = true
+                    // Main content with FAB overlay
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        // Determine which screen to show
+                        when (val state = authState) {
+                            is AuthState.Loading -> {
+                                AppLogger.d(TAG, "Showing Loading state")
+                                AuthScreen(
+                                    isLoading = true,
+                                    errorMessage = null,
+                                    onSignInClick = {},
+                                    onShareLogsClick = downloadLogs
+                                )
+                            }
+                            
+                            is AuthState.SignedOut -> {
+                                AppLogger.d(TAG, "Showing SignedOut state")
+                                AuthScreen(
+                                    isLoading = false,
+                                    errorMessage = errorMessage,
+                                    onSignInClick = {
+                                        AppLogger.i(TAG, "User clicked Sign In")
+                                        errorMessage = null
+                                        signInLauncher.launch(authManager.getSignInIntent())
+                                    },
+                                    onShareLogsClick = downloadLogs
+                                )
+                            }
+                            
+                            is AuthState.Error -> {
+                                AppLogger.w(TAG, "Showing Error state: ${state.message}")
+                                AuthScreen(
+                                    isLoading = false,
+                                    errorMessage = state.message,
+                                    onSignInClick = {
+                                        AppLogger.i(TAG, "User clicked Sign In (after error)")
+                                        errorMessage = null
+                                        signInLauncher.launch(authManager.getSignInIntent())
+                                    },
+                                    onShareLogsClick = downloadLogs
+                                )
+                            }
+                            
+                            is AuthState.SignedIn -> {
+                                AppLogger.d(TAG, "Showing SignedIn state for: ${state.email}")
+                                if (!securePrefs.isSetupComplete) {
+                                    // Need to complete setup
+                                    SetupScreen(
+                                        isCreatingSheet = isCreatingSheet,
+                                        sheetCreated = sheetCreated,
+                                        onSetupComplete = {
+                                            scope.launch {
+                                                AppLogger.i(TAG, "Setup completing...")
+                                                // Create or find sheet if not done
+                                                if (!sheetCreated) {
+                                                    isCreatingSheet = true
+                                                    val result = sheetsRepository.findOrCreateSheet()
+                                                    isCreatingSheet = false
+                                                    sheetCreated = result.isSuccess
+                                                    AppLogger.i(TAG, "Sheet creation result: ${result.isSuccess}")
+                                                }
                                                 
-                                                // Start location service
-                                                AppLogger.i(TAG, "Starting location service...")
-                                                LocationForegroundService.start(this@MainActivity)
+                                                if (sheetCreated) {
+                                                    // Mark setup complete
+                                                    securePrefs.isSetupComplete = true
+                                                    
+                                                    // Start location service
+                                                    AppLogger.i(TAG, "Starting location service...")
+                                                    LocationForegroundService.start(this@MainActivity)
+                                                }
+                                            }
+                                        }
+                                    )
+                                    
+                                    // Trigger sheet creation when entering setup
+                                    if (!sheetCreated && !isCreatingSheet) {
+                                        scope.launch {
+                                            AppLogger.i(TAG, "Creating sheet on setup enter...")
+                                            isCreatingSheet = true
+                                            val result = sheetsRepository.findOrCreateSheet()
+                                            isCreatingSheet = false
+                                            sheetCreated = result.isSuccess
+                                            if (result.isFailure) {
+                                                AppLogger.e(TAG, "Sheet creation failed", result.exceptionOrNull())
                                             }
                                         }
                                     }
-                                )
-                                
-                                // Trigger sheet creation when entering setup
-                                if (!sheetCreated && !isCreatingSheet) {
-                                    scope.launch {
-                                        AppLogger.i(TAG, "Creating sheet on setup enter...")
-                                        isCreatingSheet = true
-                                        val result = sheetsRepository.findOrCreateSheet()
-                                        isCreatingSheet = false
-                                        sheetCreated = result.isSuccess
-                                        if (result.isFailure) {
-                                            AppLogger.e(TAG, "Sheet creation failed", result.exceptionOrNull())
-                                        }
+                                } else {
+                                    // Setup complete - show active screen
+                                    ActiveScreen(
+                                        lastLocationTime = latestPing?.timestamp,
+                                        batteryLevel = latestPing?.batteryLevel ?: getBatteryLevel(),
+                                        pendingSyncCount = unsyncedCount,
+                                        lastSyncTime = lastSyncTime,
+                                        userName = state.displayName
+                                    )
+                                    
+                                    // Ensure service is running
+                                    if (!LocationForegroundService.isServiceRunning()) {
+                                        AppLogger.i(TAG, "Service not running, starting...")
+                                        LocationForegroundService.start(this@MainActivity)
                                     }
-                                }
-                            } else {
-                                // Setup complete - show active screen
-                                ActiveScreen(
-                                    lastLocationTime = latestPing?.timestamp,
-                                    batteryLevel = latestPing?.batteryLevel ?: getBatteryLevel(),
-                                    pendingSyncCount = unsyncedCount,
-                                    lastSyncTime = lastSyncTime,
-                                    userName = state.displayName
-                                )
-                                
-                                // Ensure service is running
-                                if (!LocationForegroundService.isServiceRunning()) {
-                                    AppLogger.i(TAG, "Service not running, starting...")
-                                    LocationForegroundService.start(this@MainActivity)
                                 }
                             }
                         }
+                        
+                        // Floating Action Button for logs - ALWAYS VISIBLE
+                        DebugLogsFab(
+                            onClick = downloadLogs,
+                            modifier = Modifier.align(Alignment.BottomEnd)
+                        )
                     }
                 }
             }
