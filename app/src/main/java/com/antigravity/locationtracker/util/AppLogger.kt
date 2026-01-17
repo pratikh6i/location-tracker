@@ -34,9 +34,14 @@ object AppLogger {
         android.util.Log.i(tag, message)
     }
     
-    fun w(tag: String, message: String) {
-        log("W", tag, message)
-        android.util.Log.w(tag, message)
+    fun w(tag: String, message: String, throwable: Throwable? = null) {
+        val fullMessage = if (throwable != null) {
+            "$message\n${throwable.stackTraceToString()}"
+        } else {
+            message
+        }
+        log("W", tag, fullMessage)
+        android.util.Log.w(tag, message, throwable)
     }
     
     fun e(tag: String, message: String, throwable: Throwable? = null) {
