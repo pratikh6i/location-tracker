@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -87,6 +88,7 @@ class MainActivity : ComponentActivity() {
                     var isCreatingSheet by remember { mutableStateOf(false) }
                     var sheetCreated by remember { mutableStateOf(securePrefs.hasSpreadsheet()) }
                     var errorMessage by remember { mutableStateOf<String?>(null) }
+                    var currentInterval by remember { mutableIntStateOf(securePrefs.trackingIntervalMinutes) }
                     
                     // Location data for Active screen
                     val unsyncedCount by database.locationPingDao().getUnsyncedCountFlow().collectAsState(initial = 0)
@@ -97,6 +99,18 @@ class MainActivity : ComponentActivity() {
                     val downloadLogs = {
                         AppLogger.i(TAG, "User requested to download logs")
                         AppLogger.saveAndNotify(this@MainActivity)
+                    }
+                    
+                    // Interval change handler
+                    val onIntervalChanged: (Int) -> Unit = { newInterval ->
+                        AppLogger.i(TAG, "Interval changed to: $newInterval minutes")
+                        securePrefs.trackingIntervalMinutes = newInterval
+                        currentInterval = newInterval
+                        // Restart service with new interval
+                        if (LocationForegroundService.isServiceRunning()) {
+                            LocationForegroundService.stop(this@MainActivity)
+                            LocationForegroundService.start(this@MainActivity)
+                        }
                     }
                     
                     // Main content with FAB overlay
@@ -151,23 +165,12 @@ class MainActivity : ComponentActivity() {
                                         onSetupComplete = {
                                             scope.launch {
                                                 AppLogger.i(TAG, "Setup completing...")
-                                                // Create or find sheet if not done
-                                                if (!sheetCreated) {
-                                                    isCreatingSheet = true
-                                                    val result = sheetsRepository.findOrCreateSheet()
-                                                    isCreatingSheet = false
-                                                    sheetCreated = result.isSuccess
-                                                    AppLogger.i(TAG, "Sheet creation result: ${result.isSuccess}")
-                                                }
+                                                // Mark setup complete
+                                                securePrefs.isSetupComplete = true
                                                 
-                                                if (sheetCreated) {
-                                                    // Mark setup complete
-                                                    securePrefs.isSetupComplete = true
-                                                    
-                                                    // Start location service
-                                                    AppLogger.i(TAG, "Starting location service...")
-                                                    LocationForegroundService.start(this@MainActivity)
-                                                }
+                                                // Start location service
+                                                AppLogger.i(TAG, "Starting location service...")
+                                                LocationForegroundService.start(this@MainActivity)
                                             }
                                         }
                                     )
@@ -188,11 +191,16 @@ class MainActivity : ComponentActivity() {
                                 } else {
                                     // Setup complete - show active screen
                                     ActiveScreen(
-                                        lastLocationTime = latestPing?.timestamp,
+                                        lastLocationTime = latestPing?.timestamp ?: securePrefs.lastLocationTime,
+                                        lastLatitude = latestPing?.latitude ?: securePrefs.lastLatitude,
+                                        lastLongitude = latestPing?.longitude ?: securePrefs.lastLongitude,
                                         batteryLevel = latestPing?.batteryLevel ?: getBatteryLevel(),
                                         pendingSyncCount = unsyncedCount,
                                         lastSyncTime = lastSyncTime,
-                                        userName = state.displayName
+                                        userName = state.displayName,
+                                        spreadsheetUrl = securePrefs.getSpreadsheetUrl(),
+                                        currentIntervalMinutes = currentInterval,
+                                        onIntervalChanged = onIntervalChanged
                                     )
                                     
                                     // Ensure service is running

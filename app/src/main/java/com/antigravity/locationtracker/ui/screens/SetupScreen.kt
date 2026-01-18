@@ -106,13 +106,6 @@ fun SetupScreen(
         batteryOptimized = checkBatteryOptimization()
     }
     
-    // Auto-complete when sheet is created and all permissions granted
-    LaunchedEffect(sheetCreated, locationGranted, backgroundLocationGranted, batteryOptimized, notificationGranted) {
-        if (sheetCreated && locationGranted && backgroundLocationGranted && batteryOptimized && notificationGranted) {
-            onSetupComplete()
-        }
-    }
-    
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -229,21 +222,64 @@ fun SetupScreen(
                             }
                         )
                     } else {
-                        SetupStepContent(
-                            title = "Creating Your Sheet",
-                            description = "Setting up your personal location history...",
-                            buttonText = "",
-                            isLoading = isCreatingSheet || !sheetCreated,
-                            onClick = {}
-                        )
-                        
-                        if (sheetCreated) {
-                            Spacer(modifier = Modifier.height(16.dp))
+                        // Sheet creation step
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
                             Text(
-                                text = "✓ Sheet created successfully!",
-                                style = AppTypography.bodyLarge,
-                                color = SuccessGreen
+                                text = "Creating Your Sheet",
+                                style = AppTypography.headlineMedium,
+                                color = DeepCharcoal,
+                                textAlign = TextAlign.Center
                             )
+                            
+                            Spacer(modifier = Modifier.height(16.dp))
+                            
+                            Text(
+                                text = "Setting up your personal location history...",
+                                style = AppTypography.bodyLarge,
+                                color = WarmGray,
+                                textAlign = TextAlign.Center
+                            )
+                            
+                            Spacer(modifier = Modifier.height(32.dp))
+                            
+                            if (isCreatingSheet && !sheetCreated) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(48.dp),
+                                    color = MintGreen,
+                                    strokeWidth = 4.dp
+                                )
+                            }
+                            
+                            if (sheetCreated) {
+                                Text(
+                                    text = "✓ Sheet created successfully!",
+                                    style = AppTypography.bodyLarge,
+                                    color = SuccessGreen
+                                )
+                                
+                                Spacer(modifier = Modifier.height(32.dp))
+                                
+                                // Continue button
+                                Button(
+                                    onClick = onSetupComplete,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(64.dp),
+                                    shape = RoundedCornerShape(16.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = SuccessGreen,
+                                        contentColor = Color.White
+                                    )
+                                ) {
+                                    Text(
+                                        text = "Start Tracking →",
+                                        style = AppTypography.titleMedium,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
                         }
                     }
                 }

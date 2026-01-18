@@ -1,15 +1,23 @@
 package com.antigravity.locationtracker.ui.screens
 
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,21 +26,41 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import com.antigravity.locationtracker.data.prefs.SecurePreferences
 import com.antigravity.locationtracker.ui.theme.AppTypography
 import com.antigravity.locationtracker.ui.theme.DeepCharcoal
 import com.antigravity.locationtracker.ui.theme.LightMint
@@ -48,16 +76,24 @@ import java.util.Locale
 
 /**
  * Active screen shown when tracking is running.
- * "Set-and-forget" - no interactive controls, just status display.
+ * Enhanced dashboard with frequency settings and sheet link.
  */
 @Composable
 fun ActiveScreen(
     lastLocationTime: Long?,
+    lastLatitude: Double?,
+    lastLongitude: Double?,
     batteryLevel: Int,
     pendingSyncCount: Int,
     lastSyncTime: Long?,
-    userName: String?
+    userName: String?,
+    spreadsheetUrl: String?,
+    currentIntervalMinutes: Int,
+    onIntervalChanged: (Int) -> Unit
 ) {
+    val context = LocalContext.current
+    var showFrequencyDialog by remember { mutableStateOf(false) }
+    
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -70,10 +106,11 @@ fun ActiveScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(24.dp),
+                .padding(24.dp)
+                .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Spacer(modifier = Modifier.height(48.dp))
+            Spacer(modifier = Modifier.height(32.dp))
             
             // Greeting
             userName?.let { name ->
@@ -88,18 +125,46 @@ fun ActiveScreen(
             // Large "Active" status indicator
             ActiveStatusIndicator()
             
-            Spacer(modifier = Modifier.height(48.dp))
+            Spacer(modifier = Modifier.height(32.dp))
             
             // Status cards
             Column(
                 modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Last location card
+                // Frequency card - clickable
+                StatusCard(
+                    icon = "⏱️",
+                    label = "Update Frequency",
+                    value = formatInterval(currentIntervalMinutes),
+                    subtitle = "Tap to change",
+                    backgroundColor = MintGreen.copy(alpha = 0.3f),
+                    onClick = { showFrequencyDialog = true }
+                )
+                
+                // Google Sheet link card
+                spreadsheetUrl?.let { url ->
+                    StatusCard(
+                        icon = "📊",
+                        label = "Your Location Sheet",
+                        value = "Open in Google Sheets",
+                        subtitle = "Tap to view your data",
+                        backgroundColor = SuccessGreenLight,
+                        onClick = {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                            context.startActivity(intent)
+                        }
+                    )
+                }
+                
+                // Last location card with coordinates
                 StatusCard(
                     icon = "📍",
                     label = "Last Location",
                     value = formatTime(lastLocationTime),
+                    subtitle = if (lastLatitude != null && lastLongitude != null && lastLatitude != 0.0) {
+                        "%.4f, %.4f".format(lastLatitude, lastLongitude)
+                    } else null,
                     backgroundColor = PaleBlue.copy(alpha = 0.3f)
                 )
                 
@@ -129,7 +194,7 @@ fun ActiveScreen(
                 )
             }
             
-            Spacer(modifier = Modifier.weight(1f))
+            Spacer(modifier = Modifier.height(24.dp))
             
             // Footer message
             Text(
@@ -139,8 +204,20 @@ fun ActiveScreen(
                 textAlign = TextAlign.Center
             )
             
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(80.dp)) // Space for FAB
         }
+    }
+    
+    // Frequency selection dialog
+    if (showFrequencyDialog) {
+        FrequencyDialog(
+            currentInterval = currentIntervalMinutes,
+            onDismiss = { showFrequencyDialog = false },
+            onIntervalSelected = { interval ->
+                onIntervalChanged(interval)
+                showFrequencyDialog = false
+            }
+        )
     }
 }
 
@@ -164,7 +241,7 @@ private fun ActiveStatusIndicator() {
         Box(
             modifier = Modifier
                 .scale(scale)
-                .size(160.dp)
+                .size(120.dp)
                 .background(
                     brush = Brush.radialGradient(
                         colors = listOf(
@@ -176,22 +253,18 @@ private fun ActiveStatusIndicator() {
                 ),
             contentAlignment = Alignment.Center
         ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    text = "✓",
-                    style = AppTypography.displayLarge,
-                    color = Color.White
-                )
-            }
+            Text(
+                text = "✓",
+                style = AppTypography.displayLarge,
+                color = Color.White
+            )
         }
         
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
         
         Text(
             text = "Active",
-            style = AppTypography.displayMedium,
+            style = AppTypography.headlineMedium,
             color = SuccessGreen,
             fontWeight = FontWeight.Bold
         )
@@ -204,34 +277,37 @@ private fun StatusCard(
     label: String,
     value: String,
     subtitle: String? = null,
-    backgroundColor: Color
+    backgroundColor: Color,
+    onClick: (() -> Unit)? = null
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = backgroundColor),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(20.dp),
+                .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // Icon
             Box(
                 modifier = Modifier
-                    .size(56.dp)
+                    .size(48.dp)
                     .background(Color.White.copy(alpha = 0.7f), CircleShape),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = icon,
-                    style = AppTypography.headlineMedium
+                    style = AppTypography.titleLarge
                 )
             }
             
-            Spacer(modifier = Modifier.width(16.dp))
+            Spacer(modifier = Modifier.width(12.dp))
             
             // Text content
             Column(
@@ -239,24 +315,196 @@ private fun StatusCard(
             ) {
                 Text(
                     text = label,
-                    style = AppTypography.labelLarge,
+                    style = AppTypography.labelMedium,
                     color = WarmGray
                 )
                 Text(
                     text = value,
-                    style = AppTypography.titleLarge,
+                    style = AppTypography.titleMedium,
                     color = DeepCharcoal,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 subtitle?.let {
                     Text(
                         text = it,
-                        style = AppTypography.labelMedium,
+                        style = AppTypography.labelSmall,
                         color = WarmGray
                     )
                 }
             }
+            
+            // Arrow indicator if clickable
+            if (onClick != null) {
+                Text(
+                    text = "→",
+                    style = AppTypography.titleLarge,
+                    color = WarmGray
+                )
+            }
         }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun FrequencyDialog(
+    currentInterval: Int,
+    onDismiss: () -> Unit,
+    onIntervalSelected: (Int) -> Unit
+) {
+    var selectedInterval by remember { mutableIntStateOf(currentInterval) }
+    var customMinutes by remember { mutableStateOf("") }
+    var showCustomInput by remember { mutableStateOf(false) }
+    
+    val presets = SecurePreferences.PRESET_INTERVALS
+    
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = SoftWhite
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(24.dp)
+                    .fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Update Frequency",
+                    style = AppTypography.headlineSmall,
+                    color = DeepCharcoal,
+                    fontWeight = FontWeight.Bold
+                )
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Text(
+                    text = "How often should we track your location?",
+                    style = AppTypography.bodyMedium,
+                    color = WarmGray,
+                    textAlign = TextAlign.Center
+                )
+                
+                Spacer(modifier = Modifier.height(20.dp))
+                
+                // Preset chips
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    presets.forEach { minutes ->
+                        FilterChip(
+                            selected = selectedInterval == minutes && !showCustomInput,
+                            onClick = {
+                                selectedInterval = minutes
+                                showCustomInput = false
+                            },
+                            label = {
+                                Text(
+                                    text = formatInterval(minutes),
+                                    style = AppTypography.labelMedium
+                                )
+                            },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = MintGreen,
+                                selectedLabelColor = DeepCharcoal
+                            )
+                        )
+                    }
+                    
+                    // Custom chip
+                    FilterChip(
+                        selected = showCustomInput,
+                        onClick = { showCustomInput = true },
+                        label = {
+                            Text(
+                                text = "Custom",
+                                style = AppTypography.labelMedium
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MintGreen,
+                            selectedLabelColor = DeepCharcoal
+                        )
+                    )
+                }
+                
+                // Custom input field
+                AnimatedVisibility(
+                    visible = showCustomInput,
+                    enter = fadeIn(),
+                    exit = fadeOut()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(top = 16.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = customMinutes,
+                            onValueChange = { 
+                                customMinutes = it.filter { char -> char.isDigit() }
+                            },
+                            label = { Text("Minutes") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = MintGreen,
+                                cursorColor = MintGreen
+                            )
+                        )
+                    }
+                }
+                
+                Spacer(modifier = Modifier.height(24.dp))
+                
+                // Buttons
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("Cancel")
+                    }
+                    
+                    Button(
+                        onClick = {
+                            val interval = if (showCustomInput && customMinutes.isNotEmpty()) {
+                                customMinutes.toIntOrNull()?.coerceIn(1, 1440) ?: currentInterval
+                            } else {
+                                selectedInterval
+                            }
+                            onIntervalSelected(interval)
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MintGreen,
+                            contentColor = DeepCharcoal
+                        )
+                    ) {
+                        Text("Save", fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun formatInterval(minutes: Int): String {
+    return when {
+        minutes < 60 -> "$minutes min"
+        minutes == 60 -> "1 hour"
+        minutes == 120 -> "2 hours"
+        minutes == 240 -> "4 hours"
+        minutes % 60 == 0 -> "${minutes / 60} hours"
+        else -> "$minutes min"
     }
 }
 

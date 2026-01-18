@@ -28,6 +28,7 @@ import com.antigravity.locationtracker.data.db.AppDatabase
 import com.antigravity.locationtracker.data.db.LocationPingEntity
 import com.antigravity.locationtracker.data.prefs.SecurePreferences
 import com.antigravity.locationtracker.sync.SyncWorker
+import com.antigravity.locationtracker.util.AppLogger
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
@@ -49,10 +50,6 @@ class LocationForegroundService : Service() {
     companion object {
         private const val TAG = "LocationService"
         private const val NOTIFICATION_ID = 1001
-        
-        // Location update interval: 5 minutes
-        private const val LOCATION_INTERVAL_MS = 5 * 60 * 1000L
-        private const val LOCATION_FASTEST_INTERVAL_MS = 2 * 60 * 1000L
         
         // Work names
         private const val SYNC_WORK_NAME = "location_sync_work"
@@ -82,7 +79,7 @@ class LocationForegroundService : Service() {
     
     override fun onCreate() {
         super.onCreate()
-        Log.i(TAG, "Service created")
+        AppLogger.i(TAG, "Service created")
         
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         securePrefs = SecurePreferences(this)
@@ -93,7 +90,7 @@ class LocationForegroundService : Service() {
     }
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.i(TAG, "Service started")
+        AppLogger.i(TAG, "Service started")
         
         // Start as foreground service
         val notification = createNotification("Tracking active")
@@ -125,7 +122,7 @@ class LocationForegroundService : Service() {
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 result.lastLocation?.let { location ->
-                    Log.i(TAG, "Location received: ${location.latitude}, ${location.longitude}")
+                    AppLogger.i(TAG, "Location received: ${location.latitude}, ${location.longitude}")
                     
                     serviceScope.launch {
                         saveLocation(
@@ -156,16 +153,23 @@ class LocationForegroundService : Service() {
                 Manifest.permission.ACCESS_FINE_LOCATION
             ) != PackageManager.PERMISSION_GRANTED
         ) {
-            Log.e(TAG, "Location permission not granted")
+            AppLogger.e(TAG, "Location permission not granted")
             stopSelf()
             return
         }
         
+        // Get interval from preferences (convert minutes to milliseconds)
+        val intervalMinutes = securePrefs.trackingIntervalMinutes
+        val intervalMs = intervalMinutes * 60 * 1000L
+        val fastestIntervalMs = (intervalMinutes * 60 * 1000L * 0.8).toLong() // 80% of main interval
+        
+        AppLogger.i(TAG, "Configuring location updates - interval: $intervalMinutes minutes ($intervalMs ms)")
+        
         val locationRequest = LocationRequest.Builder(
             Priority.PRIORITY_HIGH_ACCURACY,
-            LOCATION_INTERVAL_MS
+            intervalMs
         )
-            .setMinUpdateIntervalMillis(LOCATION_FASTEST_INTERVAL_MS)
+            .setMinUpdateIntervalMillis(fastestIntervalMs)
             .setWaitForAccurateLocation(true)
             .build()
         
@@ -175,9 +179,9 @@ class LocationForegroundService : Service() {
                 locationCallback,
                 Looper.getMainLooper()
             )
-            Log.i(TAG, "Location updates started - interval: ${LOCATION_INTERVAL_MS / 1000}s")
+            AppLogger.i(TAG, "Location updates started - interval: $intervalMinutes min")
         } catch (e: SecurityException) {
-            Log.e(TAG, "Failed to start location updates", e)
+            AppLogger.e(TAG, "Failed to start location updates", e)
             stopSelf()
         }
     }
@@ -200,9 +204,13 @@ class LocationForegroundService : Service() {
         )
         
         database.locationPingDao().insert(ping)
-        securePrefs.lastLocationTime = System.currentTimeMillis()
         
-        Log.i(TAG, "Location saved to database")
+        // Save last location info
+        securePrefs.lastLocationTime = System.currentTimeMillis()
+        securePrefs.lastLatitude = latitude
+        securePrefs.lastLongitude = longitude
+        
+        AppLogger.i(TAG, "Location saved to database")
     }
     
     private fun getBatteryLevel(): Int {
@@ -227,7 +235,7 @@ class LocationForegroundService : Service() {
             syncRequest
         )
         
-        Log.i(TAG, "Sync worker scheduled")
+        AppLogger.i(TAG, "Sync worker scheduled")
     }
     
     private fun createNotification(text: String): Notification {
@@ -262,7 +270,7 @@ class LocationForegroundService : Service() {
     
     override fun onDestroy() {
         super.onDestroy()
-        Log.i(TAG, "Service destroyed")
+        AppLogger.i(TAG, "Service destroyed")
         
         fusedLocationClient.removeLocationUpdates(locationCallback)
         isRunning = false

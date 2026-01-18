@@ -24,6 +24,15 @@ class SecurePreferences(context: Context) {
         private const val KEY_SETUP_COMPLETE = "setup_complete"
         private const val KEY_SERVICE_ENABLED = "service_enabled"
         private const val KEY_LAST_LOCATION_TIME = "last_location_time"
+        private const val KEY_TRACKING_INTERVAL = "tracking_interval_minutes"
+        private const val KEY_LAST_LATITUDE = "last_latitude"
+        private const val KEY_LAST_LONGITUDE = "last_longitude"
+        
+        // Default tracking interval: 15 minutes
+        const val DEFAULT_INTERVAL_MINUTES = 15
+        
+        // Preset intervals in minutes
+        val PRESET_INTERVALS = listOf(1, 5, 10, 15, 20, 30, 45, 60, 120, 240)
     }
     
     private val masterKey = MasterKey.Builder(context)
@@ -66,6 +75,11 @@ class SecurePreferences(context: Context) {
     
     fun hasSpreadsheet(): Boolean = !spreadsheetId.isNullOrBlank()
     
+    fun getSpreadsheetUrl(): String? {
+        val id = spreadsheetId ?: return null
+        return "https://docs.google.com/spreadsheets/d/$id"
+    }
+    
     // ========== User Info ==========
     
     var userEmail: String?
@@ -89,6 +103,31 @@ class SecurePreferences(context: Context) {
     var lastLocationTime: Long
         get() = prefs.getLong(KEY_LAST_LOCATION_TIME, 0)
         set(value) = prefs.edit().putLong(KEY_LAST_LOCATION_TIME, value).apply()
+    
+    // ========== Tracking Settings ==========
+    
+    var trackingIntervalMinutes: Int
+        get() = prefs.getInt(KEY_TRACKING_INTERVAL, DEFAULT_INTERVAL_MINUTES)
+        set(value) = prefs.edit().putInt(KEY_TRACKING_INTERVAL, value).apply()
+    
+    var lastLatitude: Double
+        get() = java.lang.Double.longBitsToDouble(prefs.getLong(KEY_LAST_LATITUDE, 0L))
+        set(value) = prefs.edit().putLong(KEY_LAST_LATITUDE, java.lang.Double.doubleToLongBits(value)).apply()
+    
+    var lastLongitude: Double
+        get() = java.lang.Double.longBitsToDouble(prefs.getLong(KEY_LAST_LONGITUDE, 0L))
+        set(value) = prefs.edit().putLong(KEY_LAST_LONGITUDE, java.lang.Double.doubleToLongBits(value)).apply()
+    
+    fun formatInterval(minutes: Int): String {
+        return when {
+            minutes < 60 -> "$minutes min"
+            minutes == 60 -> "1 hour"
+            minutes == 120 -> "2 hours"
+            minutes == 240 -> "4 hours"
+            minutes % 60 == 0 -> "${minutes / 60} hours"
+            else -> "$minutes min"
+        }
+    }
     
     // ========== Clear All ==========
     
