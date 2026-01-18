@@ -244,6 +244,7 @@ class MainActivity : ComponentActivity() {
                                         userName = state.displayName,
                                         spreadsheetUrl = securePrefs.getSpreadsheetUrl(),
                                         onSettingsClick = { showSettings = true },
+                                        onProfileClick = { showSettings = true }, // Opens settings for profile
                                         onSosClick = onSosClick,
                                         onRefreshClick = onSyncNow
                                     )

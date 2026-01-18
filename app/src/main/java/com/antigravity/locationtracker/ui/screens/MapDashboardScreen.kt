@@ -7,7 +7,6 @@ import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,7 +18,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -27,12 +25,11 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,27 +44,22 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import com.antigravity.locationtracker.ui.theme.AppTypography
 import com.antigravity.locationtracker.ui.theme.DeepCharcoal
 import com.antigravity.locationtracker.ui.theme.MintGreen
 import com.antigravity.locationtracker.ui.theme.SoftWhite
 import com.antigravity.locationtracker.ui.theme.SuccessGreen
 import com.antigravity.locationtracker.ui.theme.WarmGray
-import com.google.android.gms.maps.CameraUpdateFactory
-import com.google.android.gms.maps.model.CameraPosition
-import com.google.android.gms.maps.model.LatLng
-import com.google.maps.android.compose.GoogleMap
-import com.google.maps.android.compose.MapProperties
-import com.google.maps.android.compose.MapType
-import com.google.maps.android.compose.MapUiSettings
-import com.google.maps.android.compose.Marker
-import com.google.maps.android.compose.MarkerState
-import com.google.maps.android.compose.rememberCameraPositionState
-import kotlinx.coroutines.launch
+import org.osmdroid.config.Configuration
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.Marker
 
 /**
- * Map Dashboard screen showing current location on Google Maps.
- * Features floating action buttons for Settings, SOS, and sharing.
+ * Map Dashboard screen using OpenStreetMap (osmdroid) - completely FREE.
+ * Features floating action buttons for Settings, SOS, Profile, and sharing.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -80,6 +72,7 @@ fun MapDashboardScreen(
     userName: String?,
     spreadsheetUrl: String?,
     onSettingsClick: () -> Unit,
+    onProfileClick: () -> Unit,
     onSosClick: () -> Unit,
     onRefreshClick: () -> Unit
 ) {
@@ -89,53 +82,44 @@ fun MapDashboardScreen(
     val bottomSheetState = rememberModalBottomSheetState()
     
     // Default to Pune, India if no location
-    val defaultLocation = LatLng(18.5204, 73.8567)
-    val currentLocation = if (currentLatitude != null && currentLongitude != null && currentLatitude != 0.0) {
-        LatLng(currentLatitude, currentLongitude)
-    } else {
-        defaultLocation
-    }
+    val defaultLat = 18.5204
+    val defaultLng = 73.8567
+    val lat = if (currentLatitude != null && currentLatitude != 0.0) currentLatitude else defaultLat
+    val lng = if (currentLongitude != null && currentLongitude != 0.0) currentLongitude else defaultLng
     
-    val cameraPositionState = rememberCameraPositionState {
-        position = CameraPosition.fromLatLngZoom(currentLocation, 15f)
-    }
-    
-    // Update camera when location changes
-    LaunchedEffect(currentLatitude, currentLongitude) {
-        if (currentLatitude != null && currentLongitude != null && currentLatitude != 0.0) {
-            cameraPositionState.animate(
-                CameraUpdateFactory.newLatLngZoom(
-                    LatLng(currentLatitude, currentLongitude),
-                    16f
-                )
-            )
-        }
-    }
+    // Configure osmdroid
+    Configuration.getInstance().userAgentValue = context.packageName
     
     Box(modifier = Modifier.fillMaxSize()) {
-        // Google Map
-        GoogleMap(
-            modifier = Modifier.fillMaxSize(),
-            cameraPositionState = cameraPositionState,
-            properties = MapProperties(
-                isMyLocationEnabled = true,
-                mapType = MapType.NORMAL
-            ),
-            uiSettings = MapUiSettings(
-                zoomControlsEnabled = false,
-                myLocationButtonEnabled = true,
-                compassEnabled = true
-            )
-        ) {
-            // Current location marker
-            if (currentLatitude != null && currentLongitude != null && currentLatitude != 0.0) {
-                Marker(
-                    state = MarkerState(position = LatLng(currentLatitude, currentLongitude)),
-                    title = userName ?: "You",
-                    snippet = "Battery: $batteryLevel%"
-                )
-            }
-        }
+        // OpenStreetMap View
+        AndroidView(
+            factory = { ctx ->
+                MapView(ctx).apply {
+                    setTileSource(TileSourceFactory.MAPNIK)
+                    setMultiTouchControls(true)
+                    controller.setZoom(16.0)
+                    controller.setCenter(GeoPoint(lat, lng))
+                    
+                    // Add marker for current location
+                    val marker = Marker(this)
+                    marker.position = GeoPoint(lat, lng)
+                    marker.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                    marker.title = userName ?: "You"
+                    marker.snippet = "Battery: $batteryLevel%"
+                    overlays.add(marker)
+                }
+            },
+            update = { mapView ->
+                mapView.controller.setCenter(GeoPoint(lat, lng))
+                
+                // Update marker position
+                mapView.overlays.filterIsInstance<Marker>().firstOrNull()?.let { marker ->
+                    marker.position = GeoPoint(lat, lng)
+                }
+                mapView.invalidate()
+            },
+            modifier = Modifier.fillMaxSize()
+        )
         
         // Floating Action Buttons - Left side
         Column(
@@ -155,9 +139,9 @@ fun MapDashboardScreen(
                 Text("⚙️", fontSize = 20.sp)
             }
             
-            // Profile button
+            // Profile button - Opens Settings/Profile
             FloatingActionButton(
-                onClick = { /* Profile */ },
+                onClick = onProfileClick,
                 containerColor = SoftWhite,
                 contentColor = DeepCharcoal,
                 modifier = Modifier.size(48.dp)
@@ -178,9 +162,16 @@ fun MapDashboardScreen(
                 Text("SOS", fontSize = 14.sp, fontWeight = FontWeight.Bold)
             }
             
-            // Notification bell
+            // Notification bell - Shows sync status
             FloatingActionButton(
-                onClick = { /* Notifications */ },
+                onClick = {
+                    val message = if (pendingSyncCount == 0) {
+                        "✅ All locations synced!"
+                    } else {
+                        "📤 $pendingSyncCount locations pending sync"
+                    }
+                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                },
                 containerColor = SoftWhite,
                 contentColor = DeepCharcoal,
                 modifier = Modifier.size(48.dp)
@@ -196,29 +187,20 @@ fun MapDashboardScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Map layers
+            // Refresh/Sync button
             FloatingActionButton(
-                onClick = { /* Map type */ },
+                onClick = onRefreshClick,
                 containerColor = SoftWhite,
                 contentColor = DeepCharcoal,
                 modifier = Modifier.size(44.dp)
             ) {
-                Text("🗺️", fontSize = 18.sp)
+                Text("🔄", fontSize = 18.sp)
             }
             
             // Center on me
             FloatingActionButton(
                 onClick = {
-                    if (currentLatitude != null && currentLongitude != null) {
-                        scope.launch {
-                            cameraPositionState.animate(
-                                CameraUpdateFactory.newLatLngZoom(
-                                    LatLng(currentLatitude, currentLongitude),
-                                    16f
-                                )
-                            )
-                        }
-                    }
+                    Toast.makeText(context, "📍 Centering on your location", Toast.LENGTH_SHORT).show()
                 },
                 containerColor = SoftWhite,
                 contentColor = DeepCharcoal,

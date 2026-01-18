@@ -82,10 +82,11 @@ dependencies {
     // Google Play Services
     implementation(libs.play.services.auth)
     implementation(libs.play.services.location)
-    implementation(libs.play.services.maps)
-    implementation(libs.maps.compose)
     implementation(libs.credentials)
     implementation(libs.credentials.play.services.auth)
+
+    // OpenStreetMap (free maps)
+    implementation(libs.osmdroid.android)
 
     // Google API Client
     implementation(libs.google.api.client.android)
