@@ -89,7 +89,6 @@ class MainActivity : ComponentActivity() {
                     // Navigation state
                     var showSplash by remember { mutableStateOf(true) }
                     var showSettings by remember { mutableStateOf(false) }
-                    var showFrequencyDialog by remember { mutableStateOf(false) }
                     
                     // UI state
                     var isCreatingSheet by remember { mutableStateOf(false) }
@@ -130,6 +129,21 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     
+                    val onIntervalChanged: (Int, Boolean) -> Unit = { value, devMode ->
+                        if (devMode) {
+                            securePrefs.isDevMode = true
+                            securePrefs.trackingIntervalSeconds = value
+                        } else {
+                            securePrefs.isDevMode = false
+                            securePrefs.trackingIntervalMinutes = value
+                        }
+                        // Restart service with new interval
+                        if (LocationForegroundService.isServiceRunning()) {
+                            LocationForegroundService.stop(this@MainActivity)
+                            LocationForegroundService.start(this@MainActivity)
+                        }
+                    }
+                    
                     val onSosClick: () -> Unit = {
                         scope.launch {
                             AppLogger.i(TAG, "🆘 SOS TRIGGERED!")
@@ -156,9 +170,11 @@ class MainActivity : ComponentActivity() {
                                     userEmail = if (state is AuthState.SignedIn) state.email else null,
                                     spreadsheetUrl = securePrefs.getSpreadsheetUrl(),
                                     currentIntervalDisplay = securePrefs.formatIntervalDisplay(),
+                                    currentIntervalMinutes = securePrefs.trackingIntervalMinutes,
+                                    currentIntervalSeconds = securePrefs.trackingIntervalSeconds,
                                     isDevMode = securePrefs.isDevMode,
                                     onBackClick = { showSettings = false },
-                                    onIntervalClick = { showFrequencyDialog = true },
+                                    onIntervalChanged = onIntervalChanged,
                                     onDevModeChanged = onDevModeChanged,
                                     onSignOutClick = {
                                         scope.launch {
