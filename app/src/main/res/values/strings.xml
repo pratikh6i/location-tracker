@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Antigravity Tracker</string>
+    <string name="app_name">wya</string>
     <string name="notification_channel_name">Location Tracking</string>
     <string name="notification_channel_description">Persistent notification for location tracking service</string>
     <string name="notification_title">Tracking Active</string>
