@@ -18,6 +18,8 @@ googleHttpClientGson = "1.43.3"
 securityCrypto = "1.1.0-alpha06"
 coroutinesPlayServices = "1.8.1"
 playServicesLocation = "21.3.0"
+mapsCompose = "4.3.3"
+playServicesMaps = "18.2.0"
 
 [libraries]
 # Core Android
@@ -47,6 +49,8 @@ work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx", version
 # Google Play Services Auth
 play-services-auth = { group = "com.google.android.gms", name = "play-services-auth", version.ref = "playServicesAuth" }
 play-services-location = { group = "com.google.android.gms", name = "play-services-location", version.ref = "playServicesLocation" }
+play-services-maps = { group = "com.google.android.gms", name = "play-services-maps", version.ref = "playServicesMaps" }
+maps-compose = { group = "com.google.maps.android", name = "maps-compose", version.ref = "mapsCompose" }
 credentials = { group = "androidx.credentials", name = "credentials", version.ref = "credentials" }
 credentials-play-services-auth = { group = "androidx.credentials", name = "credentials-play-services-auth", version.ref = "credentialsPlayServicesAuth" }
 
