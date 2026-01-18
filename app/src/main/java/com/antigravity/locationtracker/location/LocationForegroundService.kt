@@ -12,7 +12,6 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.IBinder
 import android.os.Looper
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -27,6 +26,7 @@ import com.antigravity.locationtracker.R
 import com.antigravity.locationtracker.data.db.AppDatabase
 import com.antigravity.locationtracker.data.db.LocationPingEntity
 import com.antigravity.locationtracker.data.prefs.SecurePreferences
+import com.antigravity.locationtracker.sync.SyncManager
 import com.antigravity.locationtracker.sync.SyncWorker
 import com.antigravity.locationtracker.util.AppLogger
 import com.google.android.gms.location.FusedLocationProviderClient
@@ -44,6 +44,7 @@ import java.util.concurrent.TimeUnit
 /**
  * Foreground service for continuous location tracking.
  * Uses FusedLocationProvider for efficient, battery-optimized location updates.
+ * Syncs immediately when network is available.
  */
 class LocationForegroundService : Service() {
     
@@ -76,6 +77,7 @@ class LocationForegroundService : Service() {
     private lateinit var locationCallback: LocationCallback
     private lateinit var securePrefs: SecurePreferences
     private lateinit var database: AppDatabase
+    private lateinit var syncManager: SyncManager
     
     override fun onCreate() {
         super.onCreate()
@@ -84,6 +86,7 @@ class LocationForegroundService : Service() {
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         securePrefs = SecurePreferences(this)
         database = AppDatabase.getInstance(this)
+        syncManager = SyncManager(this, securePrefs)
         
         setupLocationCallback()
         isRunning = true
@@ -109,7 +112,7 @@ class LocationForegroundService : Service() {
         // Start location updates
         startLocationUpdates()
         
-        // Schedule sync worker
+        // Schedule sync worker as fallback for when network is unavailable
         scheduleSyncWorker()
         
         // Mark service as enabled
@@ -125,13 +128,21 @@ class LocationForegroundService : Service() {
                     AppLogger.i(TAG, "Location received: ${location.latitude}, ${location.longitude}")
                     
                     serviceScope.launch {
-                        saveLocation(
+                        val pingId = saveLocation(
                             latitude = location.latitude,
                             longitude = location.longitude,
                             accuracy = location.accuracy,
                             altitude = if (location.hasAltitude()) location.altitude else null,
                             speed = if (location.hasSpeed()) location.speed else null
                         )
+                        
+                        // Immediately sync if network available
+                        if (syncManager.isNetworkAvailable()) {
+                            AppLogger.i(TAG, "Network available, syncing immediately...")
+                            syncManager.syncSingleLocation(pingId)
+                        } else {
+                            AppLogger.d(TAG, "No network, will sync later via WorkManager")
+                        }
                     }
                     
                     // Update notification with latest location
@@ -158,19 +169,30 @@ class LocationForegroundService : Service() {
             return
         }
         
-        // Get interval from preferences (convert minutes to milliseconds)
-        val intervalMinutes = securePrefs.trackingIntervalMinutes
-        val intervalMs = intervalMinutes * 60 * 1000L
-        val fastestIntervalMs = (intervalMinutes * 60 * 1000L * 0.8).toLong() // 80% of main interval
+        // Get interval from preferences
+        val intervalMs = securePrefs.getIntervalMillis()
+        val fastestIntervalMs = (intervalMs * 0.8).toLong().coerceAtLeast(1000L)
         
-        AppLogger.i(TAG, "Configuring location updates - interval: $intervalMinutes minutes ($intervalMs ms)")
+        // Use balanced power for longer intervals (>= 5 min), high accuracy for shorter
+        val priority = if (intervalMs >= 5 * 60 * 1000L) {
+            AppLogger.i(TAG, "Using BALANCED_POWER_ACCURACY for battery optimization")
+            Priority.PRIORITY_BALANCED_POWER_ACCURACY
+        } else {
+            AppLogger.i(TAG, "Using HIGH_ACCURACY for precise tracking")
+            Priority.PRIORITY_HIGH_ACCURACY
+        }
         
-        val locationRequest = LocationRequest.Builder(
-            Priority.PRIORITY_HIGH_ACCURACY,
-            intervalMs
-        )
+        val displayInterval = if (securePrefs.isDevMode) {
+            "${securePrefs.trackingIntervalSeconds}s (Dev)"
+        } else {
+            "${securePrefs.trackingIntervalMinutes} min"
+        }
+        
+        AppLogger.i(TAG, "Configuring location updates - interval: $displayInterval ($intervalMs ms)")
+        
+        val locationRequest = LocationRequest.Builder(priority, intervalMs)
             .setMinUpdateIntervalMillis(fastestIntervalMs)
-            .setWaitForAccurateLocation(true)
+            .setWaitForAccurateLocation(false) // Don't wait, sync what we have
             .build()
         
         try {
@@ -179,7 +201,7 @@ class LocationForegroundService : Service() {
                 locationCallback,
                 Looper.getMainLooper()
             )
-            AppLogger.i(TAG, "Location updates started - interval: $intervalMinutes min")
+            AppLogger.i(TAG, "Location updates started - interval: $displayInterval")
         } catch (e: SecurityException) {
             AppLogger.e(TAG, "Failed to start location updates", e)
             stopSelf()
@@ -192,7 +214,7 @@ class LocationForegroundService : Service() {
         accuracy: Float,
         altitude: Double?,
         speed: Float?
-    ) {
+    ): Long {
         val ping = LocationPingEntity(
             latitude = latitude,
             longitude = longitude,
@@ -203,14 +225,15 @@ class LocationForegroundService : Service() {
             batteryLevel = getBatteryLevel()
         )
         
-        database.locationPingDao().insert(ping)
+        val id = database.locationPingDao().insert(ping)
         
         // Save last location info
         securePrefs.lastLocationTime = System.currentTimeMillis()
         securePrefs.lastLatitude = latitude
         securePrefs.lastLongitude = longitude
         
-        AppLogger.i(TAG, "Location saved to database")
+        AppLogger.i(TAG, "Location saved to database (id: $id)")
+        return id
     }
     
     private fun getBatteryLevel(): Int {
@@ -223,8 +246,9 @@ class LocationForegroundService : Service() {
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
         
+        // Fallback sync every 15 min in case instant sync missed some
         val syncRequest = PeriodicWorkRequestBuilder<SyncWorker>(
-            15, TimeUnit.MINUTES // Minimum interval for periodic work
+            15, TimeUnit.MINUTES
         )
             .setConstraints(constraints)
             .build()
@@ -235,7 +259,7 @@ class LocationForegroundService : Service() {
             syncRequest
         )
         
-        AppLogger.i(TAG, "Sync worker scheduled")
+        AppLogger.i(TAG, "Sync worker scheduled as fallback")
     }
     
     private fun createNotification(text: String): Notification {

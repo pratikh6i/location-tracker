@@ -26,22 +26,25 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -76,8 +79,9 @@ import java.util.Locale
 
 /**
  * Active screen shown when tracking is running.
- * Enhanced dashboard with frequency settings and sheet link.
+ * Enhanced dashboard with frequency settings, sheet link, and sync controls.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ActiveScreen(
     lastLocationTime: Long?,
@@ -88,133 +92,145 @@ fun ActiveScreen(
     lastSyncTime: Long?,
     userName: String?,
     spreadsheetUrl: String?,
-    currentIntervalMinutes: Int,
-    onIntervalChanged: (Int) -> Unit
+    currentIntervalDisplay: String,
+    isDevMode: Boolean,
+    isSyncing: Boolean,
+    onRefresh: () -> Unit,
+    onSyncNowClick: () -> Unit,
+    onIntervalChanged: (Int, Boolean) -> Unit, // (value, isDevMode)
+    onDevModeChanged: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
     var showFrequencyDialog by remember { mutableStateOf(false) }
+    val pullToRefreshState = rememberPullToRefreshState()
     
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                brush = Brush.verticalGradient(
-                    colors = listOf(SoftWhite, LightMint)
-                )
-            )
+    PullToRefreshBox(
+        isRefreshing = isSyncing,
+        onRefresh = onRefresh,
+        state = pullToRefreshState,
+        modifier = Modifier.fillMaxSize()
     ) {
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(24.dp)
-                .verticalScroll(rememberScrollState()),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .background(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(SoftWhite, LightMint)
+                    )
+                )
         ) {
-            Spacer(modifier = Modifier.height(32.dp))
-            
-            // Greeting
-            userName?.let { name ->
-                Text(
-                    text = "Hello, ${name.split(" ").firstOrNull() ?: name}",
-                    style = AppTypography.titleLarge,
-                    color = WarmGray
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-            
-            // Large "Active" status indicator
-            ActiveStatusIndicator()
-            
-            Spacer(modifier = Modifier.height(32.dp))
-            
-            // Status cards
             Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Frequency card - clickable
-                StatusCard(
-                    icon = "⏱️",
-                    label = "Update Frequency",
-                    value = formatInterval(currentIntervalMinutes),
-                    subtitle = "Tap to change",
-                    backgroundColor = MintGreen.copy(alpha = 0.3f),
-                    onClick = { showFrequencyDialog = true }
-                )
+                Spacer(modifier = Modifier.height(32.dp))
                 
-                // Google Sheet link card
-                spreadsheetUrl?.let { url ->
+                // Greeting
+                userName?.let { name ->
+                    Text(
+                        text = "Hello, ${name.split(" ").firstOrNull() ?: name}",
+                        style = AppTypography.titleLarge,
+                        color = WarmGray
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+                
+                // Large "Active" status indicator
+                ActiveStatusIndicator()
+                
+                Spacer(modifier = Modifier.height(24.dp))
+                
+                // Status cards
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Frequency card - clickable
                     StatusCard(
-                        icon = "📊",
-                        label = "Your Location Sheet",
-                        value = "Open in Google Sheets",
-                        subtitle = "Tap to view your data",
-                        backgroundColor = SuccessGreenLight,
-                        onClick = {
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                            context.startActivity(intent)
+                        icon = "⏱️",
+                        label = "Update Frequency",
+                        value = currentIntervalDisplay,
+                        subtitle = if (isDevMode) "⚡ Dev Mode Active" else "Tap to change",
+                        backgroundColor = if (isDevMode) Color(0xFFFFF3E0) else MintGreen.copy(alpha = 0.3f),
+                        onClick = { showFrequencyDialog = true }
+                    )
+                    
+                    // Google Sheet link card
+                    spreadsheetUrl?.let { url ->
+                        StatusCard(
+                            icon = "📊",
+                            label = "Your Location Sheet",
+                            value = "Open in Google Sheets",
+                            subtitle = "Tap to view your data",
+                            backgroundColor = SuccessGreenLight,
+                            onClick = {
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                context.startActivity(intent)
+                            }
+                        )
+                    }
+                    
+                    // Last location card with coordinates
+                    StatusCard(
+                        icon = "📍",
+                        label = "Last Location",
+                        value = formatTime(lastLocationTime),
+                        subtitle = if (lastLatitude != null && lastLongitude != null && lastLatitude != 0.0) {
+                            "%.4f, %.4f".format(lastLatitude, lastLongitude)
+                        } else null,
+                        backgroundColor = PaleBlue.copy(alpha = 0.3f)
+                    )
+                    
+                    // Battery card
+                    StatusCard(
+                        icon = "🔋",
+                        label = "Battery",
+                        value = "$batteryLevel%",
+                        backgroundColor = when {
+                            batteryLevel > 50 -> SuccessGreenLight
+                            batteryLevel > 20 -> PaleBlue.copy(alpha = 0.3f)
+                            else -> Color(0xFFFEE2E2)
                         }
+                    )
+                    
+                    // Sync status card with Sync Now button
+                    SyncStatusCard(
+                        pendingSyncCount = pendingSyncCount,
+                        lastSyncTime = lastSyncTime,
+                        isSyncing = isSyncing,
+                        onSyncNowClick = onSyncNowClick
                     )
                 }
                 
-                // Last location card with coordinates
-                StatusCard(
-                    icon = "📍",
-                    label = "Last Location",
-                    value = formatTime(lastLocationTime),
-                    subtitle = if (lastLatitude != null && lastLongitude != null && lastLatitude != 0.0) {
-                        "%.4f, %.4f".format(lastLatitude, lastLongitude)
-                    } else null,
-                    backgroundColor = PaleBlue.copy(alpha = 0.3f)
+                Spacer(modifier = Modifier.height(24.dp))
+                
+                // Footer message
+                Text(
+                    text = "Pull down to refresh • Syncs instantly when online",
+                    style = AppTypography.bodyMedium,
+                    color = WarmGray,
+                    textAlign = TextAlign.Center
                 )
                 
-                // Battery card
-                StatusCard(
-                    icon = "🔋",
-                    label = "Battery",
-                    value = "$batteryLevel%",
-                    backgroundColor = when {
-                        batteryLevel > 50 -> SuccessGreenLight
-                        batteryLevel > 20 -> PaleBlue.copy(alpha = 0.3f)
-                        else -> Color(0xFFFEE2E2)
-                    }
-                )
-                
-                // Sync status card
-                StatusCard(
-                    icon = "☁️",
-                    label = "Sync Status",
-                    value = if (pendingSyncCount == 0) {
-                        "All synced"
-                    } else {
-                        "$pendingSyncCount pending"
-                    },
-                    subtitle = lastSyncTime?.let { "Last sync: ${formatTime(it)}" },
-                    backgroundColor = LightMint
-                )
+                Spacer(modifier = Modifier.height(80.dp)) // Space for FAB
             }
-            
-            Spacer(modifier = Modifier.height(24.dp))
-            
-            // Footer message
-            Text(
-                text = "Tracking is running in the background.\nNo action required.",
-                style = AppTypography.bodyMedium,
-                color = WarmGray,
-                textAlign = TextAlign.Center
-            )
-            
-            Spacer(modifier = Modifier.height(80.dp)) // Space for FAB
         }
     }
     
     // Frequency selection dialog
     if (showFrequencyDialog) {
         FrequencyDialog(
-            currentInterval = currentIntervalMinutes,
+            currentMinutes = if (isDevMode) 0 else 15,
+            currentSeconds = if (isDevMode) 30 else 0,
+            isDevMode = isDevMode,
             onDismiss = { showFrequencyDialog = false },
-            onIntervalSelected = { interval ->
-                onIntervalChanged(interval)
+            onIntervalSelected = { value, devMode ->
+                onIntervalChanged(value, devMode)
+                if (devMode != isDevMode) {
+                    onDevModeChanged(devMode)
+                }
                 showFrequencyDialog = false
             }
         )
@@ -237,11 +253,11 @@ private fun ActiveStatusIndicator() {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Pulsing green circle with "Active" text
+        // Pulsing green circle
         Box(
             modifier = Modifier
                 .scale(scale)
-                .size(120.dp)
+                .size(100.dp)
                 .background(
                     brush = Brush.radialGradient(
                         colors = listOf(
@@ -260,7 +276,7 @@ private fun ActiveStatusIndicator() {
             )
         }
         
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(8.dp))
         
         Text(
             text = "Active",
@@ -297,7 +313,7 @@ private fun StatusCard(
             // Icon
             Box(
                 modifier = Modifier
-                    .size(48.dp)
+                    .size(44.dp)
                     .background(Color.White.copy(alpha = 0.7f), CircleShape),
                 contentAlignment = Alignment.Center
             ) {
@@ -347,18 +363,104 @@ private fun StatusCard(
     }
 }
 
+@Composable
+private fun SyncStatusCard(
+    pendingSyncCount: Int,
+    lastSyncTime: Long?,
+    isSyncing: Boolean,
+    onSyncNowClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = LightMint),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Icon
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .background(Color.White.copy(alpha = 0.7f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "☁️",
+                    style = AppTypography.titleLarge
+                )
+            }
+            
+            Spacer(modifier = Modifier.width(12.dp))
+            
+            // Text content
+            Column(
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    text = "Sync Status",
+                    style = AppTypography.labelMedium,
+                    color = WarmGray
+                )
+                Text(
+                    text = if (pendingSyncCount == 0) "All synced ✓" else "$pendingSyncCount pending",
+                    style = AppTypography.titleMedium,
+                    color = if (pendingSyncCount == 0) SuccessGreen else DeepCharcoal,
+                    fontWeight = FontWeight.SemiBold
+                )
+                lastSyncTime?.let {
+                    Text(
+                        text = "Last: ${formatTime(it)}",
+                        style = AppTypography.labelSmall,
+                        color = WarmGray
+                    )
+                }
+            }
+            
+            // Sync Now button
+            if (pendingSyncCount > 0) {
+                Button(
+                    onClick = onSyncNowClick,
+                    enabled = !isSyncing,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MintGreen,
+                        contentColor = DeepCharcoal
+                    ),
+                    modifier = Modifier.height(36.dp)
+                ) {
+                    Text(
+                        text = if (isSyncing) "..." else "Sync",
+                        style = AppTypography.labelMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun FrequencyDialog(
-    currentInterval: Int,
+    currentMinutes: Int,
+    currentSeconds: Int,
+    isDevMode: Boolean,
     onDismiss: () -> Unit,
-    onIntervalSelected: (Int) -> Unit
+    onIntervalSelected: (Int, Boolean) -> Unit // (value, isDevMode)
 ) {
-    var selectedInterval by remember { mutableIntStateOf(currentInterval) }
-    var customMinutes by remember { mutableStateOf("") }
+    var devModeEnabled by remember { mutableStateOf(isDevMode) }
+    var selectedMinutes by remember { mutableIntStateOf(currentMinutes) }
+    var selectedSeconds by remember { mutableIntStateOf(currentSeconds) }
+    var customValue by remember { mutableStateOf("") }
     var showCustomInput by remember { mutableStateOf(false) }
     
-    val presets = SecurePreferences.PRESET_INTERVALS
+    val presetMinutes = SecurePreferences.PRESET_INTERVALS_MINUTES
+    val presetSeconds = SecurePreferences.DEV_INTERVALS_SECONDS
     
     Dialog(onDismissRequest = onDismiss) {
         Surface(
@@ -378,39 +480,83 @@ private fun FrequencyDialog(
                     fontWeight = FontWeight.Bold
                 )
                 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(16.dp))
                 
+                // Dev mode toggle
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            if (devModeEnabled) Color(0xFFFFF3E0) else Color.Transparent,
+                            RoundedCornerShape(12.dp)
+                        )
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column {
+                        Text(
+                            text = "⚡ Dev Mode",
+                            style = AppTypography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = DeepCharcoal
+                        )
+                        Text(
+                            text = "Track every second (battery intensive)",
+                            style = AppTypography.labelSmall,
+                            color = WarmGray
+                        )
+                    }
+                    Switch(
+                        checked = devModeEnabled,
+                        onCheckedChange = { devModeEnabled = it },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = Color(0xFFFF9800)
+                        )
+                    )
+                }
+                
+                Spacer(modifier = Modifier.height(16.dp))
+                
+                // Interval chips
                 Text(
-                    text = "How often should we track your location?",
-                    style = AppTypography.bodyMedium,
+                    text = if (devModeEnabled) "Seconds" else "Minutes",
+                    style = AppTypography.labelMedium,
                     color = WarmGray,
-                    textAlign = TextAlign.Center
+                    modifier = Modifier.align(Alignment.Start)
                 )
                 
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(8.dp))
                 
-                // Preset chips
                 FlowRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    presets.forEach { minutes ->
+                    val presets = if (devModeEnabled) presetSeconds else presetMinutes
+                    val selectedValue = if (devModeEnabled) selectedSeconds else selectedMinutes
+                    
+                    presets.forEach { value ->
                         FilterChip(
-                            selected = selectedInterval == minutes && !showCustomInput,
+                            selected = selectedValue == value && !showCustomInput,
                             onClick = {
-                                selectedInterval = minutes
+                                if (devModeEnabled) {
+                                    selectedSeconds = value
+                                } else {
+                                    selectedMinutes = value
+                                }
                                 showCustomInput = false
                             },
                             label = {
                                 Text(
-                                    text = formatInterval(minutes),
+                                    text = if (devModeEnabled) "${value}s" else formatInterval(value),
                                     style = AppTypography.labelMedium
                                 )
                             },
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = MintGreen,
-                                selectedLabelColor = DeepCharcoal
+                                selectedContainerColor = if (devModeEnabled) Color(0xFFFF9800) else MintGreen,
+                                selectedLabelColor = if (devModeEnabled) Color.White else DeepCharcoal
                             )
                         )
                     }
@@ -426,8 +572,8 @@ private fun FrequencyDialog(
                             )
                         },
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MintGreen,
-                            selectedLabelColor = DeepCharcoal
+                            selectedContainerColor = if (devModeEnabled) Color(0xFFFF9800) else MintGreen,
+                            selectedLabelColor = if (devModeEnabled) Color.White else DeepCharcoal
                         )
                     )
                 }
@@ -442,17 +588,17 @@ private fun FrequencyDialog(
                         modifier = Modifier.padding(top = 16.dp)
                     ) {
                         OutlinedTextField(
-                            value = customMinutes,
+                            value = customValue,
                             onValueChange = { 
-                                customMinutes = it.filter { char -> char.isDigit() }
+                                customValue = it.filter { char -> char.isDigit() }
                             },
-                            label = { Text("Minutes") },
+                            label = { Text(if (devModeEnabled) "Seconds" else "Minutes") },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = MintGreen,
-                                cursorColor = MintGreen
+                                focusedBorderColor = if (devModeEnabled) Color(0xFFFF9800) else MintGreen,
+                                cursorColor = if (devModeEnabled) Color(0xFFFF9800) else MintGreen
                             )
                         )
                     }
@@ -475,18 +621,20 @@ private fun FrequencyDialog(
                     
                     Button(
                         onClick = {
-                            val interval = if (showCustomInput && customMinutes.isNotEmpty()) {
-                                customMinutes.toIntOrNull()?.coerceIn(1, 1440) ?: currentInterval
+                            val value = if (showCustomInput && customValue.isNotEmpty()) {
+                                val maxValue = if (devModeEnabled) 60 else 1440
+                                customValue.toIntOrNull()?.coerceIn(1, maxValue) ?: 
+                                    if (devModeEnabled) selectedSeconds else selectedMinutes
                             } else {
-                                selectedInterval
+                                if (devModeEnabled) selectedSeconds else selectedMinutes
                             }
-                            onIntervalSelected(interval)
+                            onIntervalSelected(value, devModeEnabled)
                         },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = MintGreen,
-                            contentColor = DeepCharcoal
+                            containerColor = if (devModeEnabled) Color(0xFFFF9800) else MintGreen,
+                            contentColor = if (devModeEnabled) Color.White else DeepCharcoal
                         )
                     ) {
                         Text("Save", fontWeight = FontWeight.SemiBold)

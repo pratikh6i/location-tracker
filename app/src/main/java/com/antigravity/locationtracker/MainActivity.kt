@@ -1,6 +1,7 @@
 package com.antigravity.locationtracker
 
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -10,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -24,6 +24,7 @@ import com.antigravity.locationtracker.data.db.AppDatabase
 import com.antigravity.locationtracker.data.prefs.SecurePreferences
 import com.antigravity.locationtracker.data.sheets.SheetsRepository
 import com.antigravity.locationtracker.location.LocationForegroundService
+import com.antigravity.locationtracker.sync.SyncManager
 import com.antigravity.locationtracker.ui.components.DebugLogsFab
 import com.antigravity.locationtracker.ui.screens.ActiveScreen
 import com.antigravity.locationtracker.ui.screens.AuthScreen
@@ -47,6 +48,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var securePrefs: SecurePreferences
     private lateinit var sheetsRepository: SheetsRepository
     private lateinit var database: AppDatabase
+    private lateinit var syncManager: SyncManager
     
     private val signInLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -67,6 +69,7 @@ class MainActivity : ComponentActivity() {
         authManager = GoogleAuthManager(this, securePrefs)
         sheetsRepository = SheetsRepository(this, securePrefs)
         database = AppDatabase.getInstance(this)
+        syncManager = SyncManager(this, securePrefs)
         
         AppLogger.d(TAG, "Dependencies initialized")
         
@@ -88,7 +91,8 @@ class MainActivity : ComponentActivity() {
                     var isCreatingSheet by remember { mutableStateOf(false) }
                     var sheetCreated by remember { mutableStateOf(securePrefs.hasSpreadsheet()) }
                     var errorMessage by remember { mutableStateOf<String?>(null) }
-                    var currentInterval by remember { mutableIntStateOf(securePrefs.trackingIntervalMinutes) }
+                    var isSyncing by remember { mutableStateOf(false) }
+                    var setupCompleted by remember { mutableStateOf(false) }
                     
                     // Location data for Active screen
                     val unsyncedCount by database.locationPingDao().getUnsyncedCountFlow().collectAsState(initial = 0)
@@ -101,16 +105,55 @@ class MainActivity : ComponentActivity() {
                         AppLogger.saveAndNotify(this@MainActivity)
                     }
                     
+                    // Sync now handler
+                    val onSyncNow: () -> Unit = {
+                        scope.launch {
+                            AppLogger.i(TAG, "User triggered manual sync")
+                            isSyncing = true
+                            val result = syncManager.syncNow()
+                            isSyncing = false
+                            
+                            val message = when {
+                                result > 0 -> "Synced $result locations ✓"
+                                result == 0 -> "Already up to date ✓"
+                                else -> "Sync failed - check connection"
+                            }
+                            Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    
+                    // Refresh handler (for pull-to-refresh)
+                    val onRefresh: () -> Unit = {
+                        scope.launch {
+                            isSyncing = true
+                            syncManager.syncNow()
+                            isSyncing = false
+                        }
+                    }
+                    
                     // Interval change handler
-                    val onIntervalChanged: (Int) -> Unit = { newInterval ->
-                        AppLogger.i(TAG, "Interval changed to: $newInterval minutes")
-                        securePrefs.trackingIntervalMinutes = newInterval
-                        currentInterval = newInterval
+                    val onIntervalChanged: (Int, Boolean) -> Unit = { value, isDevMode ->
+                        AppLogger.i(TAG, "Interval changed to: $value ${if (isDevMode) "seconds (dev)" else "minutes"}")
+                        
+                        if (isDevMode) {
+                            securePrefs.isDevMode = true
+                            securePrefs.trackingIntervalSeconds = value
+                        } else {
+                            securePrefs.isDevMode = false
+                            securePrefs.trackingIntervalMinutes = value
+                        }
+                        
                         // Restart service with new interval
                         if (LocationForegroundService.isServiceRunning()) {
                             LocationForegroundService.stop(this@MainActivity)
                             LocationForegroundService.start(this@MainActivity)
                         }
+                    }
+                    
+                    // Dev mode change handler
+                    val onDevModeChanged: (Boolean) -> Unit = { enabled ->
+                        AppLogger.i(TAG, "Dev mode ${if (enabled) "enabled" else "disabled"}")
+                        securePrefs.isDevMode = enabled
                     }
                     
                     // Main content with FAB overlay
@@ -163,14 +206,17 @@ class MainActivity : ComponentActivity() {
                                         isCreatingSheet = isCreatingSheet,
                                         sheetCreated = sheetCreated,
                                         onSetupComplete = {
-                                            scope.launch {
-                                                AppLogger.i(TAG, "Setup completing...")
-                                                // Mark setup complete
-                                                securePrefs.isSetupComplete = true
-                                                
-                                                // Start location service
-                                                AppLogger.i(TAG, "Starting location service...")
-                                                LocationForegroundService.start(this@MainActivity)
+                                            if (!setupCompleted) {
+                                                setupCompleted = true
+                                                scope.launch {
+                                                    AppLogger.i(TAG, "Setup completing...")
+                                                    // Mark setup complete
+                                                    securePrefs.isSetupComplete = true
+                                                    
+                                                    // Start location service
+                                                    AppLogger.i(TAG, "Starting location service...")
+                                                    LocationForegroundService.start(this@MainActivity)
+                                                }
                                             }
                                         }
                                     )
@@ -199,8 +245,13 @@ class MainActivity : ComponentActivity() {
                                         lastSyncTime = lastSyncTime,
                                         userName = state.displayName,
                                         spreadsheetUrl = securePrefs.getSpreadsheetUrl(),
-                                        currentIntervalMinutes = currentInterval,
-                                        onIntervalChanged = onIntervalChanged
+                                        currentIntervalDisplay = securePrefs.formatIntervalDisplay(),
+                                        isDevMode = securePrefs.isDevMode,
+                                        isSyncing = isSyncing,
+                                        onRefresh = onRefresh,
+                                        onSyncNowClick = onSyncNow,
+                                        onIntervalChanged = onIntervalChanged,
+                                        onDevModeChanged = onDevModeChanged
                                     )
                                     
                                     // Ensure service is running

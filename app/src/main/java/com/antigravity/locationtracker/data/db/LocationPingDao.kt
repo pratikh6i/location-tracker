@@ -44,6 +44,12 @@ interface LocationPingDao {
     suspend fun markSynced(ids: List<Long>, syncedAt: Long = System.currentTimeMillis())
     
     /**
+     * Get a specific ping by ID.
+     */
+    @Query("SELECT * FROM location_pings WHERE id = :id")
+    suspend fun getById(id: Long): LocationPingEntity?
+    
+    /**
      * Get the most recent location ping.
      */
     @Query("SELECT * FROM location_pings ORDER BY timestamp DESC LIMIT 1")

@@ -25,14 +25,19 @@ class SecurePreferences(context: Context) {
         private const val KEY_SERVICE_ENABLED = "service_enabled"
         private const val KEY_LAST_LOCATION_TIME = "last_location_time"
         private const val KEY_TRACKING_INTERVAL = "tracking_interval_minutes"
+        private const val KEY_TRACKING_INTERVAL_SECONDS = "tracking_interval_seconds"
         private const val KEY_LAST_LATITUDE = "last_latitude"
         private const val KEY_LAST_LONGITUDE = "last_longitude"
+        private const val KEY_DEV_MODE = "dev_mode"
         
         // Default tracking interval: 15 minutes
         const val DEFAULT_INTERVAL_MINUTES = 15
         
-        // Preset intervals in minutes
-        val PRESET_INTERVALS = listOf(1, 5, 10, 15, 20, 30, 45, 60, 120, 240)
+        // Preset intervals in minutes (normal mode)
+        val PRESET_INTERVALS_MINUTES = listOf(1, 5, 10, 15, 20, 30, 45, 60, 120, 240)
+        
+        // Dev mode intervals in seconds
+        val DEV_INTERVALS_SECONDS = listOf(1, 5, 10, 30)
     }
     
     private val masterKey = MasterKey.Builder(context)
@@ -106,9 +111,29 @@ class SecurePreferences(context: Context) {
     
     // ========== Tracking Settings ==========
     
+    var isDevMode: Boolean
+        get() = prefs.getBoolean(KEY_DEV_MODE, false)
+        set(value) = prefs.edit().putBoolean(KEY_DEV_MODE, value).apply()
+    
     var trackingIntervalMinutes: Int
         get() = prefs.getInt(KEY_TRACKING_INTERVAL, DEFAULT_INTERVAL_MINUTES)
         set(value) = prefs.edit().putInt(KEY_TRACKING_INTERVAL, value).apply()
+    
+    var trackingIntervalSeconds: Int
+        get() = prefs.getInt(KEY_TRACKING_INTERVAL_SECONDS, 30)
+        set(value) = prefs.edit().putInt(KEY_TRACKING_INTERVAL_SECONDS, value).apply()
+    
+    /**
+     * Get the tracking interval in milliseconds.
+     * Uses seconds in dev mode, minutes in normal mode.
+     */
+    fun getIntervalMillis(): Long {
+        return if (isDevMode) {
+            trackingIntervalSeconds * 1000L
+        } else {
+            trackingIntervalMinutes * 60 * 1000L
+        }
+    }
     
     var lastLatitude: Double
         get() = java.lang.Double.longBitsToDouble(prefs.getLong(KEY_LAST_LATITUDE, 0L))
@@ -126,6 +151,14 @@ class SecurePreferences(context: Context) {
             minutes == 240 -> "4 hours"
             minutes % 60 == 0 -> "${minutes / 60} hours"
             else -> "$minutes min"
+        }
+    }
+    
+    fun formatIntervalDisplay(): String {
+        return if (isDevMode) {
+            "${trackingIntervalSeconds}s (Dev)"
+        } else {
+            formatInterval(trackingIntervalMinutes)
         }
     }
     
