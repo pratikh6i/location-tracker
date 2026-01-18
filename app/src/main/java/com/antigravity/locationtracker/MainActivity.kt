@@ -246,6 +246,8 @@ class MainActivity : ComponentActivity() {
                                         userName = state.displayName,
                                         spreadsheetUrl = securePrefs.getSpreadsheetUrl(),
                                         currentIntervalDisplay = securePrefs.formatIntervalDisplay(),
+                                        currentIntervalMinutes = securePrefs.trackingIntervalMinutes,
+                                        currentIntervalSeconds = securePrefs.trackingIntervalSeconds,
                                         isDevMode = securePrefs.isDevMode,
                                         isSyncing = isSyncing,
                                         onRefresh = onRefresh,

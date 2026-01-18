@@ -95,6 +95,8 @@ fun ActiveScreen(
     userName: String?,
     spreadsheetUrl: String?,
     currentIntervalDisplay: String,
+    currentIntervalMinutes: Int,
+    currentIntervalSeconds: Int,
     isDevMode: Boolean,
     isSyncing: Boolean,
     onRefresh: () -> Unit,
@@ -247,8 +249,8 @@ fun ActiveScreen(
     // Frequency selection dialog
     if (showFrequencyDialog) {
         FrequencyDialog(
-            currentMinutes = if (isDevMode) 0 else 15,
-            currentSeconds = if (isDevMode) 30 else 0,
+            currentMinutes = currentIntervalMinutes,
+            currentSeconds = currentIntervalSeconds,
             isDevMode = isDevMode,
             onDismiss = { showFrequencyDialog = false },
             onIntervalSelected = { value, devMode ->
