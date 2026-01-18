@@ -1,7 +1,11 @@
 package com.antigravity.locationtracker.ui.screens
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -149,7 +153,7 @@ fun ActiveScreen(
                     onClick = { showFrequencyDialog = true }
                 )
                 
-                // Google Sheet link card
+                // Google Sheet link card - opens in browser
                 spreadsheetUrl?.let { url ->
                     StatusCard(
                         icon = "📊",
@@ -160,6 +164,21 @@ fun ActiveScreen(
                         onClick = {
                             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
                             context.startActivity(intent)
+                        }
+                    )
+                    
+                    // Share link card - copies to clipboard
+                    StatusCard(
+                        icon = "🔗",
+                        label = "Share Sheet Link",
+                        value = "Copy link to clipboard",
+                        subtitle = "Share with family or others",
+                        backgroundColor = PaleBlue.copy(alpha = 0.4f),
+                        onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            val clip = ClipData.newPlainText("Location Sheet Link", url)
+                            clipboard.setPrimaryClip(clip)
+                            Toast.makeText(context, "📋 Link copied! Share it with anyone.", Toast.LENGTH_SHORT).show()
                         }
                     )
                 }
@@ -508,7 +527,7 @@ private fun FrequencyDialog(
                             color = DeepCharcoal
                         )
                         Text(
-                            text = "Track every second (battery intensive)",
+                            text = "Fast tracking (timing varies by GPS)",
                             style = AppTypography.labelSmall,
                             color = WarmGray
                         )
