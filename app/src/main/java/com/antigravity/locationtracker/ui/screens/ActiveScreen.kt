@@ -26,14 +26,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.OutlinedButton
@@ -43,8 +44,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -81,7 +80,6 @@ import java.util.Locale
  * Active screen shown when tracking is running.
  * Enhanced dashboard with frequency settings, sheet link, and sync controls.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ActiveScreen(
     lastLocationTime: Long?,
@@ -102,120 +100,128 @@ fun ActiveScreen(
 ) {
     val context = LocalContext.current
     var showFrequencyDialog by remember { mutableStateOf(false) }
-    val pullToRefreshState = rememberPullToRefreshState()
     
-    PullToRefreshBox(
-        isRefreshing = isSyncing,
-        onRefresh = onRefresh,
-        state = pullToRefreshState,
-        modifier = Modifier.fillMaxSize()
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                brush = Brush.verticalGradient(
+                    colors = listOf(SoftWhite, LightMint)
+                )
+            )
     ) {
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(SoftWhite, LightMint)
-                    )
-                )
+                .padding(24.dp)
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            Spacer(modifier = Modifier.height(32.dp))
+            
+            // Greeting
+            userName?.let { name ->
+                Text(
+                    text = "Hello, ${name.split(" ").firstOrNull() ?: name}",
+                    style = AppTypography.titleLarge,
+                    color = WarmGray
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            
+            // Large "Active" status indicator
+            ActiveStatusIndicator()
+            
+            Spacer(modifier = Modifier.height(24.dp))
+            
+            // Status cards
             Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Spacer(modifier = Modifier.height(32.dp))
+                // Frequency card - clickable
+                StatusCard(
+                    icon = "⏱️",
+                    label = "Update Frequency",
+                    value = currentIntervalDisplay,
+                    subtitle = if (isDevMode) "⚡ Dev Mode Active" else "Tap to change",
+                    backgroundColor = if (isDevMode) Color(0xFFFFF3E0) else MintGreen.copy(alpha = 0.3f),
+                    onClick = { showFrequencyDialog = true }
+                )
                 
-                // Greeting
-                userName?.let { name ->
-                    Text(
-                        text = "Hello, ${name.split(" ").firstOrNull() ?: name}",
-                        style = AppTypography.titleLarge,
-                        color = WarmGray
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-                
-                // Large "Active" status indicator
-                ActiveStatusIndicator()
-                
-                Spacer(modifier = Modifier.height(24.dp))
-                
-                // Status cards
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    // Frequency card - clickable
+                // Google Sheet link card
+                spreadsheetUrl?.let { url ->
                     StatusCard(
-                        icon = "⏱️",
-                        label = "Update Frequency",
-                        value = currentIntervalDisplay,
-                        subtitle = if (isDevMode) "⚡ Dev Mode Active" else "Tap to change",
-                        backgroundColor = if (isDevMode) Color(0xFFFFF3E0) else MintGreen.copy(alpha = 0.3f),
-                        onClick = { showFrequencyDialog = true }
-                    )
-                    
-                    // Google Sheet link card
-                    spreadsheetUrl?.let { url ->
-                        StatusCard(
-                            icon = "📊",
-                            label = "Your Location Sheet",
-                            value = "Open in Google Sheets",
-                            subtitle = "Tap to view your data",
-                            backgroundColor = SuccessGreenLight,
-                            onClick = {
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                context.startActivity(intent)
-                            }
-                        )
-                    }
-                    
-                    // Last location card with coordinates
-                    StatusCard(
-                        icon = "📍",
-                        label = "Last Location",
-                        value = formatTime(lastLocationTime),
-                        subtitle = if (lastLatitude != null && lastLongitude != null && lastLatitude != 0.0) {
-                            "%.4f, %.4f".format(lastLatitude, lastLongitude)
-                        } else null,
-                        backgroundColor = PaleBlue.copy(alpha = 0.3f)
-                    )
-                    
-                    // Battery card
-                    StatusCard(
-                        icon = "🔋",
-                        label = "Battery",
-                        value = "$batteryLevel%",
-                        backgroundColor = when {
-                            batteryLevel > 50 -> SuccessGreenLight
-                            batteryLevel > 20 -> PaleBlue.copy(alpha = 0.3f)
-                            else -> Color(0xFFFEE2E2)
+                        icon = "📊",
+                        label = "Your Location Sheet",
+                        value = "Open in Google Sheets",
+                        subtitle = "Tap to view your data",
+                        backgroundColor = SuccessGreenLight,
+                        onClick = {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                            context.startActivity(intent)
                         }
                     )
-                    
-                    // Sync status card with Sync Now button
-                    SyncStatusCard(
-                        pendingSyncCount = pendingSyncCount,
-                        lastSyncTime = lastSyncTime,
-                        isSyncing = isSyncing,
-                        onSyncNowClick = onSyncNowClick
-                    )
                 }
                 
-                Spacer(modifier = Modifier.height(24.dp))
-                
-                // Footer message
-                Text(
-                    text = "Pull down to refresh • Syncs instantly when online",
-                    style = AppTypography.bodyMedium,
-                    color = WarmGray,
-                    textAlign = TextAlign.Center
+                // Last location card with coordinates
+                StatusCard(
+                    icon = "📍",
+                    label = "Last Location",
+                    value = formatTime(lastLocationTime),
+                    subtitle = if (lastLatitude != null && lastLongitude != null && lastLatitude != 0.0) {
+                        "%.4f, %.4f".format(lastLatitude, lastLongitude)
+                    } else null,
+                    backgroundColor = PaleBlue.copy(alpha = 0.3f)
                 )
                 
-                Spacer(modifier = Modifier.height(80.dp)) // Space for FAB
+                // Battery card
+                StatusCard(
+                    icon = "🔋",
+                    label = "Battery",
+                    value = "$batteryLevel%",
+                    backgroundColor = when {
+                        batteryLevel > 50 -> SuccessGreenLight
+                        batteryLevel > 20 -> PaleBlue.copy(alpha = 0.3f)
+                        else -> Color(0xFFFEE2E2)
+                    }
+                )
+                
+                // Sync status card with Sync Now button
+                SyncStatusCard(
+                    pendingSyncCount = pendingSyncCount,
+                    lastSyncTime = lastSyncTime,
+                    isSyncing = isSyncing,
+                    onSyncNowClick = onSyncNowClick
+                )
             }
+            
+            Spacer(modifier = Modifier.height(24.dp))
+            
+            // Refresh button
+            OutlinedButton(
+                onClick = onRefresh,
+                enabled = !isSyncing,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = if (isSyncing) "Syncing..." else "🔄 Refresh",
+                    style = AppTypography.labelLarge
+                )
+            }
+            
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            // Footer message
+            Text(
+                text = "Syncs instantly when online",
+                style = AppTypography.bodyMedium,
+                color = WarmGray,
+                textAlign = TextAlign.Center
+            )
+            
+            Spacer(modifier = Modifier.height(80.dp)) // Space for FAB
         }
     }
     
