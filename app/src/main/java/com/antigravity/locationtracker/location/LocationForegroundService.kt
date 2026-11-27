@@ -1,34 +1,30 @@
 package com.antigravity.locationtracker.location
 
-import android.Manifest
 import android.app.Notification
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
-import android.os.BatteryManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Build
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
-import androidx.work.Constraints
-import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.NetworkType
-import androidx.work.PeriodicWorkRequestBuilder
-import androidx.work.WorkManager
 import com.antigravity.locationtracker.AntigravityApp
 import com.antigravity.locationtracker.MainActivity
 import com.antigravity.locationtracker.R
-import com.antigravity.locationtracker.data.db.AppDatabase
-import com.antigravity.locationtracker.data.db.LocationPingEntity
 import com.antigravity.locationtracker.data.prefs.SecurePreferences
 import com.antigravity.locationtracker.sync.SyncManager
-import com.antigravity.locationtracker.sync.SyncWorker
 import com.antigravity.locationtracker.util.AppLogger
+import com.antigravity.locationtracker.util.DeviceControlHelper
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
@@ -38,66 +34,151 @@ import com.google.android.gms.location.Priority
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
- * Foreground service for continuous location tracking.
- * Uses FusedLocationProvider for efficient, battery-optimized location updates.
- * Syncs immediately when network is available.
+ * Foreground service for continuous & 4-hour Doze-proof location tracking.
+ * Automatically flushes queued offline locations as soon as connectivity returns.
  */
 class LocationForegroundService : Service() {
-    
+
     companion object {
         private const val TAG = "LocationService"
         private const val NOTIFICATION_ID = 1001
-        
-        // Work names
-        private const val SYNC_WORK_NAME = "location_sync_work"
-        
+        private const val ALERT_NOTIFICATION_ID = 1002
+        private const val WAKELOCK_TIMEOUT_MS = 45_000L
+
+        const val ACTION_START = "com.antigravity.locationtracker.action.START"
+        const val ACTION_UPDATE_INTERVAL = "com.antigravity.locationtracker.action.UPDATE_INTERVAL"
+        const val ACTION_PING_NOW = "com.antigravity.locationtracker.action.PING_NOW"
+        const val ACTION_STOP = "com.antigravity.locationtracker.action.STOP"
+        const val EXTRA_EVENT_TYPE = "extra_event_type"
+
         @Volatile
         private var isRunning = false
-        
+
         fun isServiceRunning(): Boolean = isRunning
-        
+
         fun start(context: Context) {
-            val intent = Intent(context, LocationForegroundService::class.java)
+            val intent = Intent(context, LocationForegroundService::class.java).apply {
+                action = ACTION_START
+            }
             ContextCompat.startForegroundService(context, intent)
         }
-        
+
+        fun updateInterval(context: Context) {
+            val intent = Intent(context, LocationForegroundService::class.java).apply {
+                action = ACTION_UPDATE_INTERVAL
+            }
+            if (isRunning) {
+                context.startService(intent)
+            } else {
+                ContextCompat.startForegroundService(context, intent)
+            }
+        }
+
+        fun pingNow(context: Context, eventType: String = "MANUAL") {
+            val intent = Intent(context, LocationForegroundService::class.java).apply {
+                action = ACTION_PING_NOW
+                putExtra(EXTRA_EVENT_TYPE, eventType)
+            }
+            ContextCompat.startForegroundService(context, intent)
+        }
+
         fun stop(context: Context) {
-            val intent = Intent(context, LocationForegroundService::class.java)
-            context.stopService(intent)
+            val intent = Intent(context, LocationForegroundService::class.java).apply {
+                action = ACTION_STOP
+            }
+            if (isRunning) {
+                context.startService(intent)
+            } else {
+                SecurePreferences.getInstance(context).isServiceEnabled = false
+                TrackingScheduler.cancelAll(context)
+            }
         }
     }
-    
+
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    
+    private val captureMutex = Mutex()
+
     private lateinit var fusedLocationClient: FusedLocationProviderClient
     private lateinit var locationCallback: LocationCallback
     private lateinit var securePrefs: SecurePreferences
-    private lateinit var database: AppDatabase
     private lateinit var syncManager: SyncManager
-    
+    private var connectivityManager: ConnectivityManager? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var locationUpdatesRegistered = false
+
     override fun onCreate() {
         super.onCreate()
         AppLogger.i(TAG, "Service created")
-        
+
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
-        securePrefs = SecurePreferences(this)
-        database = AppDatabase.getInstance(this)
+        securePrefs = SecurePreferences.getInstance(this)
         syncManager = SyncManager(this, securePrefs)
-        
+
         setupLocationCallback()
+        registerNetworkFlushCallback()
         isRunning = true
     }
-    
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        AppLogger.i(TAG, "Service started")
-        
-        // Start as foreground service
-        val notification = createNotification("Tracking active")
-        
+        val action = intent?.action ?: ACTION_START
+        AppLogger.i(TAG, "onStartCommand action=$action")
+
+        // Always promote to foreground first so Android 12+ never throws ForegroundServiceDidNotStartInTimeException
+        ensureForeground("Tracking active (${securePrefs.formatIntervalDisplay()})")
+
+        if (action == ACTION_STOP) {
+            AppLogger.i(TAG, "Explicit stop requested")
+            securePrefs.isServiceEnabled = false
+            TrackingScheduler.cancelAll(this)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        if (!DeviceControlHelper.hasFineLocationPermission(this)) {
+            AppLogger.e(TAG, "Location permission not granted; stopping service")
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        securePrefs.isServiceEnabled = true
+        DeviceControlHelper.applyAntiTheftPolicies(this)
+
+        when (action) {
+            ACTION_UPDATE_INTERVAL -> {
+                restartLocationUpdates()
+                TrackingScheduler.scheduleAll(this)
+                updateNotification("Interval: ${securePrefs.formatIntervalDisplay()}")
+            }
+            ACTION_PING_NOW -> {
+                val eventType = intent?.getStringExtra(EXTRA_EVENT_TYPE) ?: "MANUAL"
+                if (!locationUpdatesRegistered) {
+                    restartLocationUpdates()
+                }
+                TrackingScheduler.scheduleAll(this)
+                triggerActiveCaptureAndSync(eventType)
+            }
+            else -> {
+                restartLocationUpdates()
+                TrackingScheduler.scheduleAll(this)
+                // Capture an immediate initial fix if none recently recorded
+                val ageMs = System.currentTimeMillis() - securePrefs.lastLocationTime
+                if (securePrefs.lastLocationTime == 0L || ageMs >= securePrefs.getIntervalMillis()) {
+                    triggerActiveCaptureAndSync("STARTUP")
+                }
+            }
+        }
+
+        return START_STICKY
+    }
+
+    private fun ensureForeground(text: String) {
+        val notification = createNotification(text)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ServiceCompat.startForeground(
                 this,
@@ -108,172 +189,183 @@ class LocationForegroundService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
-        
-        // Start location updates
-        startLocationUpdates()
-        
-        // Schedule sync worker as fallback for when network is unavailable
-        scheduleSyncWorker()
-        
-        // Mark service as enabled
-        securePrefs.isServiceEnabled = true
-        
-        return START_STICKY
     }
-    
+
     private fun setupLocationCallback() {
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
-                result.lastLocation?.let { location ->
-                    AppLogger.i(TAG, "Location received: ${location.latitude}, ${location.longitude}")
-                    
-                    serviceScope.launch {
-                        val pingId = saveLocation(
-                            latitude = location.latitude,
-                            longitude = location.longitude,
-                            accuracy = location.accuracy,
-                            altitude = if (location.hasAltitude()) location.altitude else null,
-                            speed = if (location.hasSpeed()) location.speed else null
+                val location = result.lastLocation ?: return
+                val minGapMs = (securePrefs.getIntervalMillis() * 0.75).toLong().coerceAtMost(60_000L)
+                val sinceLast = System.currentTimeMillis() - securePrefs.lastLocationTime
+                if (sinceLast < minGapMs) {
+                    AppLogger.d(TAG, "Skipping passive update (${sinceLast}ms < ${minGapMs}ms)")
+                    return
+                }
+
+                serviceScope.launch {
+                    captureMutex.withLock {
+                        val ping = LocationHelper.saveRawLocation(this@LocationForegroundService, location, "AUTO")
+                        updateNotification(
+                            String.format(
+                                "%.4f, %.4f • Bat: %d%%",
+                                ping.latitude,
+                                ping.longitude,
+                                ping.batteryLevel
+                            )
                         )
-                        
-                        // Immediately sync if network available
-                        if (syncManager.isNetworkAvailable()) {
-                            AppLogger.i(TAG, "Network available, syncing immediately...")
-                            syncManager.syncSingleLocation(pingId)
-                        } else {
-                            AppLogger.d(TAG, "No network, will sync later via WorkManager")
-                        }
+                        syncAfterCapture()
                     }
-                    
-                    // Update notification with latest location
-                    val notificationText = String.format(
-                        "%.4f, %.4f • Battery: %d%%",
-                        location.latitude,
-                        location.longitude,
-                        getBatteryLevel()
-                    )
-                    updateNotification(notificationText)
                 }
             }
         }
     }
-    
-    private fun startLocationUpdates() {
-        if (ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            AppLogger.e(TAG, "Location permission not granted")
-            stopSelf()
-            return
+
+    private fun triggerActiveCaptureAndSync(eventType: String) {
+        serviceScope.launch {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            val wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$TAG:PingWakeLock")
+            wakeLock.acquire(WAKELOCK_TIMEOUT_MS)
+            try {
+                captureMutex.withLock {
+                    val ping = LocationHelper.captureAndSaveLocation(this@LocationForegroundService, eventType)
+                    if (ping != null) {
+                        clearAlertNotification()
+                        updateNotification(
+                            String.format(
+                                "%.4f, %.4f • %s • Bat: %d%%",
+                                ping.latitude,
+                                ping.longitude,
+                                eventType,
+                                ping.batteryLevel
+                            )
+                        )
+                        syncAfterCapture()
+                    } else {
+                        checkAndAlertDisabledServices()
+                    }
+                }
+            } finally {
+                if (wakeLock.isHeld) {
+                    wakeLock.release()
+                }
+            }
         }
-        
-        // Get interval from preferences
+    }
+
+    private suspend fun syncAfterCapture() {
+        if (syncManager.isNetworkAvailable()) {
+            val synced = syncManager.syncNow()
+            if (synced < 0) {
+                TrackingScheduler.scheduleNetworkFlush(this)
+            }
+        } else {
+            AppLogger.d(TAG, "Offline: queued ping locally, scheduling network flush")
+            TrackingScheduler.scheduleNetworkFlush(this)
+        }
+    }
+
+    private fun restartLocationUpdates() {
+        if (locationUpdatesRegistered) {
+            runCatching { fusedLocationClient.removeLocationUpdates(locationCallback) }
+            locationUpdatesRegistered = false
+        }
+
         val intervalMs = securePrefs.getIntervalMillis()
-        val fastestIntervalMs = (intervalMs * 0.8).toLong().coerceAtLeast(1000L)
-        
-        // Use balanced power for longer intervals (>= 5 min), high accuracy for shorter
-        val priority = if (intervalMs >= 5 * 60 * 1000L) {
-            AppLogger.i(TAG, "Using BALANCED_POWER_ACCURACY for battery optimization")
-            Priority.PRIORITY_BALANCED_POWER_ACCURACY
-        } else {
-            AppLogger.i(TAG, "Using HIGH_ACCURACY for precise tracking")
+        val minUpdateMs = (intervalMs * 0.8).toLong().coerceAtLeast(1_000L)
+        val priority = if (intervalMs <= 5 * 60 * 1000L) {
             Priority.PRIORITY_HIGH_ACCURACY
-        }
-        
-        val displayInterval = if (securePrefs.isDevMode) {
-            "${securePrefs.trackingIntervalSeconds}s (Dev)"
         } else {
-            "${securePrefs.trackingIntervalMinutes} min"
+            Priority.PRIORITY_BALANCED_POWER_ACCURACY
         }
-        
-        AppLogger.i(TAG, "Configuring location updates - interval: $displayInterval ($intervalMs ms)")
-        
+
         val locationRequest = LocationRequest.Builder(priority, intervalMs)
-            .setMinUpdateIntervalMillis(fastestIntervalMs)
-            .setWaitForAccurateLocation(false) // Don't wait, sync what we have
+            .setMinUpdateIntervalMillis(minUpdateMs)
+            .setMaxUpdateDelayMillis(intervalMs)
+            .setWaitForAccurateLocation(false)
             .build()
-        
+
         try {
             fusedLocationClient.requestLocationUpdates(
                 locationRequest,
                 locationCallback,
                 Looper.getMainLooper()
             )
-            AppLogger.i(TAG, "Location updates started - interval: $displayInterval")
+            locationUpdatesRegistered = true
+            AppLogger.i(TAG, "Fused location updates registered (${securePrefs.formatIntervalDisplay()})")
         } catch (e: SecurityException) {
-            AppLogger.e(TAG, "Failed to start location updates", e)
+            AppLogger.e(TAG, "Failed to register location updates", e)
             stopSelf()
         }
     }
-    
-    private suspend fun saveLocation(
-        latitude: Double,
-        longitude: Double,
-        accuracy: Float,
-        altitude: Double?,
-        speed: Float?
-    ): Long {
-        val ping = LocationPingEntity(
-            latitude = latitude,
-            longitude = longitude,
-            accuracy = accuracy,
-            altitude = altitude,
-            speed = speed,
-            timestamp = System.currentTimeMillis(),
-            batteryLevel = getBatteryLevel()
+
+    private fun registerNetworkFlushCallback() {
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            connectivityManager = cm
+            val request = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    AppLogger.i(TAG, "Network available — flushing pending pings")
+                    serviceScope.launch {
+                        syncManager.syncNow()
+                    }
+                }
+            }
+            cm.registerNetworkCallback(request, callback)
+            networkCallback = callback
+        } catch (e: Exception) {
+            AppLogger.w(TAG, "Could not register NetworkCallback", e)
+        }
+    }
+
+    private fun checkAndAlertDisabledServices() {
+        val status = DeviceControlHelper.getProtectionStatus(this)
+        if (!status.locationServiceEnabled) {
+            showAlertNotification("Location service is turned OFF — tap to re-enable tracking")
+        }
+    }
+
+    private fun showAlertNotification(message: String) {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pi = PendingIntent.getActivity(
+            this,
+            1,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        
-        val id = database.locationPingDao().insert(ping)
-        
-        // Save last location info
-        securePrefs.lastLocationTime = System.currentTimeMillis()
-        securePrefs.lastLatitude = latitude
-        securePrefs.lastLongitude = longitude
-        
-        AppLogger.i(TAG, "Location saved to database (id: $id)")
-        return id
-    }
-    
-    private fun getBatteryLevel(): Int {
-        val batteryManager = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
-        return batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-    }
-    
-    private fun scheduleSyncWorker() {
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
+        val notification = NotificationCompat.Builder(this, AntigravityApp.NOTIFICATION_CHANNEL_ID)
+            .setContentTitle("wya Protection Alert")
+            .setContentText(message)
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setContentIntent(pi)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
             .build()
-        
-        // Fallback sync every 15 min in case instant sync missed some
-        val syncRequest = PeriodicWorkRequestBuilder<SyncWorker>(
-            15, TimeUnit.MINUTES
-        )
-            .setConstraints(constraints)
-            .build()
-        
-        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-            SYNC_WORK_NAME,
-            ExistingPeriodicWorkPolicy.KEEP,
-            syncRequest
-        )
-        
-        AppLogger.i(TAG, "Sync worker scheduled as fallback")
+        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(ALERT_NOTIFICATION_ID, notification)
     }
-    
+
+    private fun clearAlertNotification() {
+        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        nm.cancel(ALERT_NOTIFICATION_ID)
+    }
+
     private fun createNotification(text: String): Notification {
         val intent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
-        
+
         val pendingIntent = PendingIntent.getActivity(
             this,
             0,
             intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        
+
         return NotificationCompat.Builder(this, AntigravityApp.NOTIFICATION_CHANNEL_ID)
             .setContentTitle(getString(R.string.notification_title))
             .setContentText(text)
@@ -285,21 +377,27 @@ class LocationForegroundService : Service() {
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build()
     }
-    
+
     private fun updateNotification(text: String) {
         val notification = createNotification(text)
-        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
+        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(NOTIFICATION_ID, notification)
     }
-    
+
     override fun onDestroy() {
         super.onDestroy()
         AppLogger.i(TAG, "Service destroyed")
-        
-        fusedLocationClient.removeLocationUpdates(locationCallback)
+        // Do NOT reset securePrefs.isServiceEnabled here — OS kills/reboots must auto-resume!
+        if (locationUpdatesRegistered) {
+            runCatching { fusedLocationClient.removeLocationUpdates(locationCallback) }
+            locationUpdatesRegistered = false
+        }
+        networkCallback?.let { cb ->
+            runCatching { connectivityManager?.unregisterNetworkCallback(cb) }
+        }
+        serviceScope.cancel()
         isRunning = false
-        securePrefs.isServiceEnabled = false
     }
-    
+
     override fun onBind(intent: Intent?): IBinder? = null
 }

@@ -11,18 +11,19 @@ import androidx.room.PrimaryKey
 data class LocationPingEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
-    
+
     val latitude: Double,
     val longitude: Double,
     val accuracy: Float,
     val altitude: Double?,
     val speed: Float?,
-    
+
     val timestamp: Long, // Unix timestamp in milliseconds
     val batteryLevel: Int, // 0-100
-    
+
     val isSynced: Boolean = false,
     val syncedAt: Long? = null, // When it was uploaded to Sheets
-    
-    val createdAt: Long = System.currentTimeMillis()
+
+    val createdAt: Long = System.currentTimeMillis(),
+    val eventType: String = "AUTO" // AUTO, SCHEDULED, SOS, MANUAL, BOOT, STARTUP, WATCHDOG
 )

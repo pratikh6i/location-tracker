@@ -11,6 +11,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -55,6 +57,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.antigravity.locationtracker.data.prefs.SecurePreferences
 import com.antigravity.locationtracker.ui.theme.AppTypography
 import com.antigravity.locationtracker.ui.theme.DeepCharcoal
 import com.antigravity.locationtracker.ui.theme.MintGreen
@@ -62,10 +65,11 @@ import com.antigravity.locationtracker.ui.theme.PaleBlue
 import com.antigravity.locationtracker.ui.theme.SoftWhite
 import com.antigravity.locationtracker.ui.theme.SuccessGreen
 import com.antigravity.locationtracker.ui.theme.WarmGray
+import com.antigravity.locationtracker.util.DeviceControlHelper
 
 /**
- * Settings screen with profile, frequency, and app options.
- * Now includes inline frequency dialog.
+ * Settings screen with profile, 4-hour frequency selector, anti-theft diagnostics,
+ * and Device Owner / ADB auto-enable setup instructions.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -77,20 +81,26 @@ fun SettingsScreen(
     currentIntervalMinutes: Int,
     currentIntervalSeconds: Int,
     isDevMode: Boolean,
+    protectionStatus: DeviceControlHelper.ProtectionStatus,
+    isSyncing: Boolean,
     onBackClick: () -> Unit,
-    onIntervalChanged: (Int, Boolean) -> Unit, // (value, isDevMode)
+    onIntervalChanged: (Int, Boolean) -> Unit,
     onDevModeChanged: (Boolean) -> Unit,
+    onTestPingSyncClick: () -> Unit,
+    onEnableLocationClick: () -> Unit,
+    onOpenNetworkSettingsClick: () -> Unit,
+    onOpenBatterySettingsClick: () -> Unit,
     onSignOutClick: () -> Unit
 ) {
     val context = LocalContext.current
     var showFrequencyDialog by remember { mutableStateOf(false) }
-    
+    var showAdbLockDialog by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(PaleBlue.copy(alpha = 0.3f))
     ) {
-        // Top App Bar
         TopAppBar(
             title = { Text("Settings", fontWeight = FontWeight.SemiBold) },
             navigationIcon = {
@@ -98,11 +108,9 @@ fun SettingsScreen(
                     Text("←", fontSize = 24.sp)
                 }
             },
-            colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = SoftWhite
-            )
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = SoftWhite)
         )
-        
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -122,7 +130,6 @@ fun SettingsScreen(
                         .padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Avatar
                     Box(
                         modifier = Modifier
                             .size(56.dp)
@@ -137,9 +144,9 @@ fun SettingsScreen(
                             color = DeepCharcoal
                         )
                     }
-                    
+
                     Spacer(modifier = Modifier.width(16.dp))
-                    
+
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = userName ?: "User",
@@ -157,45 +164,96 @@ fun SettingsScreen(
                     }
                 }
             }
-            
-            Spacer(modifier = Modifier.height(8.dp))
-            
-            // Update Frequency - Opens dialog
+
+            // Instant Test Ping & Sync
+            SettingsItem(
+                icon = "📍",
+                title = if (isSyncing) "Capturing & Syncing..." else "Test Ping & Sync Now",
+                subtitle = "Capture live GPS fix and upload to Google Sheet immediately",
+                onClick = { if (!isSyncing) onTestPingSyncClick() }
+            )
+
+            // Update Frequency
             SettingsItem(
                 icon = "⏱️",
                 title = "Update Frequency",
                 subtitle = currentIntervalDisplay,
                 onClick = { showFrequencyDialog = true }
             )
-            
+
+            // Google Sheet
             SettingsItem(
                 icon = "📊",
                 title = "Google Sheet",
-                subtitle = "Open your location data",
+                subtitle = "Open your location history",
                 onClick = {
-                    spreadsheetUrl?.let { url ->
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                        context.startActivity(intent)
+                    if (spreadsheetUrl != null) {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(spreadsheetUrl)))
+                    } else {
+                        Toast.makeText(context, "Sheet not created yet", Toast.LENGTH_SHORT).show()
                     }
                 }
             )
-            
+
             SettingsItem(
                 icon = "🔗",
                 title = "Copy Sheet Link",
-                subtitle = "Share with family",
+                subtitle = "Share live tracking sheet",
                 onClick = {
-                    spreadsheetUrl?.let { url ->
+                    if (spreadsheetUrl != null) {
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        val clip = ClipData.newPlainText("Location Sheet Link", url)
-                        clipboard.setPrimaryClip(clip)
-                        Toast.makeText(context, "📋 Link copied!", Toast.LENGTH_SHORT).show()
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Location Sheet Link", spreadsheetUrl))
+                        Toast.makeText(context, "Link copied!", Toast.LENGTH_SHORT).show()
                     }
                 }
             )
-            
-            Spacer(modifier = Modifier.height(8.dp))
-            
+
+            // Anti-Theft Protection Diagnostics
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = SoftWhite)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "🛡️ Anti-Theft Protection Status",
+                        style = AppTypography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = DeepCharcoal
+                    )
+
+                    StatusRow(
+                        label = "GPS Location Service",
+                        ok = protectionStatus.locationServiceEnabled,
+                        actionText = if (protectionStatus.locationServiceEnabled) "ON" else "Turn ON",
+                        onClick = onEnableLocationClick
+                    )
+                    StatusRow(
+                        label = "Mobile Data / Internet",
+                        ok = protectionStatus.internetAvailable,
+                        actionText = if (protectionStatus.internetAvailable) "Online" else "Settings",
+                        onClick = onOpenNetworkSettingsClick
+                    )
+                    StatusRow(
+                        label = "Unrestricted Battery",
+                        ok = protectionStatus.batteryOptimizationIgnored,
+                        actionText = if (protectionStatus.batteryOptimizationIgnored) "OK" else "Fix",
+                        onClick = onOpenBatterySettingsClick
+                    )
+                    StatusRow(
+                        label = "Auto-Enable & Lock (Device Owner)",
+                        ok = protectionStatus.isDeviceOwner || protectionStatus.hasWriteSecureSettings,
+                        actionText = if (protectionStatus.isDeviceOwner) "Locked" else "Setup Guide",
+                        onClick = { showAdbLockDialog = true }
+                    )
+                }
+            }
+
             // Dev Mode toggle
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -211,9 +269,9 @@ fun SettingsScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("⚡", fontSize = 24.sp)
-                    
+
                     Spacer(modifier = Modifier.width(16.dp))
-                    
+
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = "Developer Mode",
@@ -222,12 +280,12 @@ fun SettingsScreen(
                             color = DeepCharcoal
                         )
                         Text(
-                            text = "Fast tracking for testing",
+                            text = "Fast second-level tracking for testing",
                             style = AppTypography.labelMedium,
                             color = WarmGray
                         )
                     }
-                    
+
                     Switch(
                         checked = isDevMode,
                         onCheckedChange = onDevModeChanged,
@@ -238,9 +296,9 @@ fun SettingsScreen(
                     )
                 }
             }
-            
-            Spacer(modifier = Modifier.height(24.dp))
-            
+
+            Spacer(modifier = Modifier.height(16.dp))
+
             // Sign Out
             Card(
                 modifier = Modifier
@@ -264,22 +322,20 @@ fun SettingsScreen(
                     )
                 }
             }
-            
-            Spacer(modifier = Modifier.height(32.dp))
-            
-            // App version
+
+            Spacer(modifier = Modifier.height(16.dp))
+
             Text(
-                text = "wya v1.0.0",
+                text = "wya v1.1.0",
                 style = AppTypography.labelSmall,
                 color = WarmGray,
                 modifier = Modifier.align(Alignment.CenterHorizontally)
             )
-            
-            Spacer(modifier = Modifier.height(16.dp))
+
+            Spacer(modifier = Modifier.height(24.dp))
         }
     }
-    
-    // Frequency Dialog
+
     if (showFrequencyDialog) {
         FrequencySelectionDialog(
             currentMinutes = currentIntervalMinutes,
@@ -289,12 +345,86 @@ fun SettingsScreen(
             onIntervalSelected = { value, devMode ->
                 onIntervalChanged(value, devMode)
                 showFrequencyDialog = false
-                Toast.makeText(
-                    context,
-                    if (devMode) "⚡ Interval: ${value}s" else "⏱️ Interval: ${value} min",
-                    Toast.LENGTH_SHORT
-                ).show()
+                val msg = if (devMode) "Interval: ${value}s" else "Interval: ${SecurePreferences.formatInterval(value)}"
+                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
             }
+        )
+    }
+
+    if (showAdbLockDialog) {
+        val dpmCommand = "adb shell dpm set-device-owner com.antigravity.locationtracker/.admin.TrackerDeviceAdminReceiver"
+        val secureSettingsCmd = "adb shell pm grant com.antigravity.locationtracker android.permission.WRITE_SECURE_SETTINGS"
+
+        AlertDialog(
+            onDismissRequest = { showAdbLockDialog = false },
+            title = { Text("Anti-Theft Auto-Enable Setup", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Android blocks normal apps from silently toggling Mobile Data or Location from phone settings. To allow auto-enabling Location & locking Mobile Data/Location against thieves:",
+                        style = AppTypography.bodyMedium,
+                        color = DeepCharcoal
+                    )
+                    Text(
+                        text = "1. Full Anti-Theft Lock (Device Owner on clean/un-signed-in phone):\n$dpmCommand",
+                        style = AppTypography.labelSmall,
+                        color = WarmGray
+                    )
+                    Text(
+                        text = "2. Or Auto-Enable Location only (works on existing phone):\n$secureSettingsCmd",
+                        style = AppTypography.labelSmall,
+                        color = WarmGray
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("ADB Setup", "$dpmCommand\n$secureSettingsCmd"))
+                        Toast.makeText(context, "ADB commands copied!", Toast.LENGTH_SHORT).show()
+                        showAdbLockDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = DeepCharcoal)
+                ) {
+                    Text("Copy Commands")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAdbLockDialog = false }) {
+                    Text("Close")
+                }
+            },
+            containerColor = SoftWhite
+        )
+    }
+}
+
+@Composable
+private fun StatusRow(
+    label: String,
+    ok: Boolean,
+    actionText: String,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = "${if (ok) "✅" else "⚠️"} $label",
+            style = AppTypography.labelMedium,
+            color = DeepCharcoal
+        )
+        Text(
+            text = actionText,
+            style = AppTypography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = if (ok) SuccessGreen else Color(0xFFE53935)
         )
     }
 }
@@ -320,9 +450,9 @@ private fun SettingsItem(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(icon, fontSize = 24.sp)
-            
+
             Spacer(modifier = Modifier.width(16.dp))
-            
+
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = title,
@@ -336,16 +466,13 @@ private fun SettingsItem(
                     color = WarmGray
                 )
             }
-            
+
             Text("→", fontSize = 20.sp, color = WarmGray)
         }
     }
 }
 
-/**
- * Frequency selection dialog with minute and second options.
- */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun FrequencySelectionDialog(
     currentMinutes: Int,
@@ -354,13 +481,13 @@ private fun FrequencySelectionDialog(
     onDismiss: () -> Unit,
     onIntervalSelected: (Int, Boolean) -> Unit
 ) {
-    val minuteOptions = listOf(5, 10, 15, 30, 60)
-    val secondOptions = listOf(1, 5, 10, 30)
-    
-    var selectedMinutes by remember { mutableIntStateOf(if (isDevMode) 15 else currentMinutes) }
+    val minuteOptions = SecurePreferences.PRESET_INTERVALS_MINUTES
+    val secondOptions = SecurePreferences.DEV_INTERVALS_SECONDS
+
+    var selectedMinutes by remember { mutableIntStateOf(if (isDevMode) SecurePreferences.DEFAULT_INTERVAL_MINUTES else currentMinutes) }
     var selectedSeconds by remember { mutableIntStateOf(if (isDevMode) currentSeconds else 30) }
     var useDevMode by remember { mutableStateOf(isDevMode) }
-    
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -372,25 +499,25 @@ private fun FrequencySelectionDialog(
         },
         text = {
             Column {
-                // Standard intervals
                 Text(
                     "📍 Standard Mode",
                     fontWeight = FontWeight.SemiBold,
                     color = DeepCharcoal,
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
-                
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    items(minuteOptions) { minutes ->
+                    minuteOptions.forEach { minutes ->
                         FilterChip(
                             selected = !useDevMode && selectedMinutes == minutes,
                             onClick = {
                                 useDevMode = false
                                 selectedMinutes = minutes
                             },
-                            label = { Text("$minutes min") },
+                            label = { Text(SecurePreferences.formatInterval(minutes)) },
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = SuccessGreen,
                                 selectedLabelColor = Color.White
@@ -398,20 +525,17 @@ private fun FrequencySelectionDialog(
                         )
                     }
                 }
-                
+
                 Spacer(modifier = Modifier.height(16.dp))
-                
-                // Dev mode intervals
+
                 Text(
                     "⚡ Dev Mode (seconds)",
                     fontWeight = FontWeight.SemiBold,
                     color = Color(0xFFFF9800),
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
-                
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
+
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(secondOptions) { seconds ->
                         FilterChip(
                             selected = useDevMode && selectedSeconds == seconds,
@@ -427,11 +551,11 @@ private fun FrequencySelectionDialog(
                         )
                     }
                 }
-                
+
                 Spacer(modifier = Modifier.height(12.dp))
-                
+
                 Text(
-                    text = if (useDevMode) "⚠️ Fast tracking uses more battery" else "✓ Battery optimized",
+                    text = if (useDevMode) "Fast tracking uses more battery" else "Doze-safe alarm + watchdog enabled",
                     style = AppTypography.labelSmall,
                     color = if (useDevMode) Color(0xFFFF9800) else SuccessGreen,
                     textAlign = TextAlign.Center,

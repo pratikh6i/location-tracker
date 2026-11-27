@@ -1,11 +1,9 @@
 package com.antigravity.locationtracker.ui.screens
 
 import android.Manifest
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
-import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -26,8 +24,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -42,6 +43,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.antigravity.locationtracker.ui.theme.AppTypography
 import com.antigravity.locationtracker.ui.theme.DeepCharcoal
 import com.antigravity.locationtracker.ui.theme.LightMint
@@ -49,37 +53,76 @@ import com.antigravity.locationtracker.ui.theme.MintGreen
 import com.antigravity.locationtracker.ui.theme.SoftWhite
 import com.antigravity.locationtracker.ui.theme.SuccessGreen
 import com.antigravity.locationtracker.ui.theme.WarmGray
+import com.antigravity.locationtracker.util.DeviceControlHelper
 
 /**
- * Setup screen for one-time configuration.
- * Guides user through permissions and battery optimization.
+ * One-time setup wizard verifying permissions, background location, battery exemption,
+ * notifications, and Google Sheet provisioning.
  */
 @Composable
 fun SetupScreen(
     isCreatingSheet: Boolean,
     sheetCreated: Boolean,
+    sheetError: String?,
+    onRetrySheet: () -> Unit,
+    onRequestEnableLocation: () -> Unit,
     onSetupComplete: () -> Unit
 ) {
     val context = LocalContext.current
-    
-    // Track current step
-    var currentStep by remember { mutableIntStateOf(1) }
-    var locationGranted by remember { mutableStateOf(false) }
-    var backgroundLocationGranted by remember { mutableStateOf(false) }
-    var batteryOptimized by remember { mutableStateOf(false) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    var locationGranted by remember { mutableStateOf(DeviceControlHelper.hasFineLocationPermission(context)) }
+    var backgroundLocationGranted by remember { mutableStateOf(DeviceControlHelper.hasBackgroundLocationPermission(context)) }
+    var batteryOptimized by remember { mutableStateOf(DeviceControlHelper.isIgnoringBatteryOptimizations(context)) }
     var notificationGranted by remember { mutableStateOf(Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) }
-    
-    // Permission launchers
+    var locationServiceOn by remember { mutableStateOf(DeviceControlHelper.isLocationEnabled(context)) }
+
+    var currentStep by remember {
+        mutableIntStateOf(
+            when {
+                !locationGranted -> 1
+                !backgroundLocationGranted -> 2
+                !batteryOptimized || !locationServiceOn -> 3
+                else -> 4
+            }
+        )
+    }
+
+    fun refreshState() {
+        locationGranted = DeviceControlHelper.hasFineLocationPermission(context)
+        backgroundLocationGranted = DeviceControlHelper.hasBackgroundLocationPermission(context)
+        batteryOptimized = DeviceControlHelper.isIgnoringBatteryOptimizations(context)
+        locationServiceOn = DeviceControlHelper.isLocationEnabled(context)
+
+        if (currentStep == 3 && batteryOptimized && locationServiceOn) {
+            currentStep = 4
+        }
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                refreshState()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    LaunchedEffect(Unit) {
+        refreshState()
+    }
+
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         locationGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
-                permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+            permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
         if (locationGranted) {
-            currentStep = 2
+            currentStep = if (backgroundLocationGranted) 3 else 2
         }
     }
-    
+
     val backgroundLocationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -88,24 +131,14 @@ fun SetupScreen(
             currentStep = 3
         }
     }
-    
+
     val notificationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         notificationGranted = granted
         currentStep = 4
     }
-    
-    // Check battery optimization status
-    fun checkBatteryOptimization(): Boolean {
-        val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-        return pm.isIgnoringBatteryOptimizations(context.packageName)
-    }
-    
-    LaunchedEffect(Unit) {
-        batteryOptimized = checkBatteryOptimization()
-    }
-    
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -122,45 +155,44 @@ fun SetupScreen(
                 .padding(32.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Header
             Text(
                 text = "Quick Setup",
                 style = AppTypography.headlineLarge,
                 color = DeepCharcoal
             )
-            
+
             Spacer(modifier = Modifier.height(8.dp))
-            
+
             Text(
-                text = "Just a few steps to get started",
+                text = "Configure reliable 4-hour anti-theft tracking",
                 style = AppTypography.bodyLarge,
-                color = WarmGray
+                color = WarmGray,
+                textAlign = TextAlign.Center
             )
-            
-            Spacer(modifier = Modifier.height(48.dp))
-            
-            // Step indicators
+
+            Spacer(modifier = Modifier.height(40.dp))
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 StepIndicator(number = 1, isActive = currentStep >= 1, isComplete = locationGranted)
                 StepLine(isComplete = locationGranted)
                 StepIndicator(number = 2, isActive = currentStep >= 2, isComplete = backgroundLocationGranted)
                 StepLine(isComplete = backgroundLocationGranted)
-                StepIndicator(number = 3, isActive = currentStep >= 3, isComplete = batteryOptimized)
-                StepLine(isComplete = batteryOptimized)
+                StepIndicator(number = 3, isActive = currentStep >= 3, isComplete = batteryOptimized && locationServiceOn)
+                StepLine(isComplete = batteryOptimized && locationServiceOn)
                 StepIndicator(number = 4, isActive = currentStep >= 4, isComplete = sheetCreated)
             }
-            
-            Spacer(modifier = Modifier.height(48.dp))
-            
-            // Current step content
+
+            Spacer(modifier = Modifier.height(40.dp))
+
             when (currentStep) {
                 1 -> {
                     SetupStepContent(
                         title = "Location Access",
-                        description = "Allow location access so we can track your whereabouts.",
+                        description = "Allow precise GPS access so the tracker can locate your device.",
                         buttonText = "Allow Location",
                         isLoading = false,
                         onClick = {
@@ -173,11 +205,12 @@ fun SetupScreen(
                         }
                     )
                 }
+
                 2 -> {
                     SetupStepContent(
                         title = "Background Location",
-                        description = "Allow location access in the background for continuous tracking.",
-                        buttonText = "Allow Background",
+                        description = "Select \"Allow all the time\" so 4-hour tracking keeps working even when the screen is off.",
+                        buttonText = "Allow All The Time",
                         isLoading = false,
                         onClick = {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -189,32 +222,92 @@ fun SetupScreen(
                         }
                     )
                 }
+
                 3 -> {
-                    SetupStepContent(
-                        title = "Battery Settings",
-                        description = "Disable battery optimization to ensure reliable tracking.",
-                        buttonText = if (batteryOptimized) "✓ Configured" else "Open Settings",
-                        isLoading = false,
-                        onClick = {
-                            if (!batteryOptimized) {
-                                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                                    data = Uri.parse("package:${context.packageName}")
-                                }
-                                context.startActivity(intent)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            text = "Reliability & GPS",
+                            style = AppTypography.headlineMedium,
+                            color = DeepCharcoal,
+                            textAlign = TextAlign.Center
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Text(
+                            text = "Disable battery optimization and turn on GPS so Android doesn't pause 4-hour wakeups.",
+                            style = AppTypography.bodyLarge,
+                            color = WarmGray,
+                            textAlign = TextAlign.Center
+                        )
+
+                        Spacer(modifier = Modifier.height(24.dp))
+
+                        if (!batteryOptimized) {
+                            Button(
+                                onClick = {
+                                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                        data = Uri.parse("package:${context.packageName}")
+                                    }
+                                    runCatching { context.startActivity(intent) }
+                                        .onFailure {
+                                            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                                        }
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(56.dp),
+                                shape = RoundedCornerShape(16.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MintGreen,
+                                    contentColor = DeepCharcoal
+                                )
+                            ) {
+                                Text("Allow Unrestricted Battery", fontWeight = FontWeight.SemiBold)
                             }
-                            // Check again after returning
-                            batteryOptimized = checkBatteryOptimization()
-                            if (batteryOptimized || true) { // Allow proceeding anyway
-                                currentStep = 4
-                            }
+                            Spacer(modifier = Modifier.height(12.dp))
                         }
-                    )
+
+                        if (!locationServiceOn) {
+                            Button(
+                                onClick = {
+                                    onRequestEnableLocation()
+                                    refreshState()
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(56.dp),
+                                shape = RoundedCornerShape(16.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MintGreen,
+                                    contentColor = DeepCharcoal
+                                )
+                            ) {
+                                Text("Turn On Location Service", fontWeight = FontWeight.SemiBold)
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+                        }
+
+                        OutlinedButton(
+                            onClick = { currentStep = 4 },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Text(
+                                text = if (batteryOptimized && locationServiceOn) "Continue →" else "Skip for now →",
+                                color = DeepCharcoal
+                            )
+                        }
+                    }
                 }
+
                 4 -> {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !notificationGranted) {
                         SetupStepContent(
                             title = "Notifications",
-                            description = "Allow notifications to show tracking status.",
+                            description = "Allow notifications so the foreground tracking service stays alive reliably.",
                             buttonText = "Allow Notifications",
                             isLoading = false,
                             onClick = {
@@ -222,46 +315,60 @@ fun SetupScreen(
                             }
                         )
                     } else {
-                        // Sheet creation step
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
-                                text = "Creating Your Sheet",
+                                text = if (sheetCreated) "Ready to Track" else "Creating Your Sheet",
                                 style = AppTypography.headlineMedium,
                                 color = DeepCharcoal,
                                 textAlign = TextAlign.Center
                             )
-                            
+
                             Spacer(modifier = Modifier.height(16.dp))
-                            
+
                             Text(
-                                text = "Setting up your personal location history...",
+                                text = when {
+                                    sheetCreated -> "Your Google Sheet is connected and 4-hour tracking is ready."
+                                    sheetError != null -> sheetError
+                                    else -> "Setting up your personal location history in Google Drive..."
+                                },
                                 style = AppTypography.bodyLarge,
-                                color = WarmGray,
+                                color = if (sheetError != null && !sheetCreated) MaterialTheme.colorScheme.error else WarmGray,
                                 textAlign = TextAlign.Center
                             )
-                            
+
                             Spacer(modifier = Modifier.height(32.dp))
-                            
+
                             if (isCreatingSheet && !sheetCreated) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(48.dp),
                                     color = MintGreen,
                                     strokeWidth = 4.dp
                                 )
+                            } else if (sheetError != null && !sheetCreated) {
+                                Button(
+                                    onClick = onRetrySheet,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(56.dp),
+                                    shape = RoundedCornerShape(16.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MintGreen,
+                                        contentColor = DeepCharcoal
+                                    )
+                                ) {
+                                    Text("Retry Sheet Setup", fontWeight = FontWeight.SemiBold)
+                                }
                             }
-                            
+
                             if (sheetCreated) {
                                 Text(
-                                    text = "✓ Sheet created successfully!",
+                                    text = "✓ Sheet ready!",
                                     style = AppTypography.bodyLarge,
                                     color = SuccessGreen
                                 )
-                                
-                                Spacer(modifier = Modifier.height(32.dp))
-                                
-                                // Continue button
+
+                                Spacer(modifier = Modifier.height(24.dp))
+
                                 Button(
                                     onClick = onSetupComplete,
                                     modifier = Modifier
@@ -337,27 +444,25 @@ private fun SetupStepContent(
     isLoading: Boolean,
     onClick: () -> Unit
 ) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
             text = title,
             style = AppTypography.headlineMedium,
             color = DeepCharcoal,
             textAlign = TextAlign.Center
         )
-        
+
         Spacer(modifier = Modifier.height(16.dp))
-        
+
         Text(
             text = description,
             style = AppTypography.bodyLarge,
             color = WarmGray,
             textAlign = TextAlign.Center
         )
-        
+
         Spacer(modifier = Modifier.height(32.dp))
-        
+
         if (isLoading) {
             CircularProgressIndicator(
                 modifier = Modifier.size(48.dp),

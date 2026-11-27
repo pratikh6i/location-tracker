@@ -5,6 +5,8 @@ import com.antigravity.locationtracker.data.db.LocationPingEntity
 import com.antigravity.locationtracker.data.prefs.SecurePreferences
 import com.antigravity.locationtracker.util.AppLogger
 import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
+import com.google.api.client.googleapis.json.GoogleJsonResponseException
+import com.google.api.client.http.HttpRequestInitializer
 import com.google.api.client.http.javanet.NetHttpTransport
 import com.google.api.client.json.gson.GsonFactory
 import com.google.api.services.drive.Drive
@@ -23,7 +25,7 @@ import java.util.TimeZone
 
 /**
  * Repository for interacting with Google Sheets API.
- * Handles sheet creation, discovery, and data appending.
+ * Handles sheet creation, discovery, and fast chronological appending.
  */
 class SheetsRepository(
     private val context: Context,
@@ -33,115 +35,139 @@ class SheetsRepository(
         private const val TAG = "SheetsRepository"
         private const val APP_NAME = "Antigravity Location Tracker"
         private const val SHEET_NAME = "Antigravity_Location_History"
-        private const val SHEET_RANGE = "Sheet1!A:H"
-        
-        // Scopes required for Sheets and Drive API
+        private const val SHEET_RANGE = "A:J"
+        private const val CONNECT_TIMEOUT_MS = 15_000
+        private const val READ_TIMEOUT_MS = 15_000
+
         val REQUIRED_SCOPES = listOf(
             SheetsScopes.SPREADSHEETS,
             DriveScopes.DRIVE_FILE
         )
+
+        val HEADER_ROW = listOf(
+            "Timestamp",
+            "Date",
+            "Time",
+            "Latitude",
+            "Longitude",
+            "Accuracy (m)",
+            "Battery (%)",
+            "Day",
+            "Event",
+            "Google Maps"
+        )
+
+        internal fun formatPingRow(
+            ping: LocationPingEntity,
+            timeZoneId: String = "Asia/Kolkata"
+        ): List<String> {
+            val tz = TimeZone.getTimeZone(timeZoneId)
+            val dateFormat = SimpleDateFormat("dd/MM/yyyy", Locale.US).apply { timeZone = tz }
+            val timeFormat = SimpleDateFormat("hh:mm:ss a", Locale.US).apply { timeZone = tz }
+            val dayFormat = SimpleDateFormat("EEEE", Locale.ENGLISH).apply { timeZone = tz }
+            val timestampFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).apply { timeZone = tz }
+
+            val date = Date(ping.timestamp)
+            val mapsUrl = "https://maps.google.com/?q=${ping.latitude},${ping.longitude}"
+
+            return listOf(
+                timestampFormat.format(date),
+                dateFormat.format(date),
+                timeFormat.format(date),
+                ping.latitude.toString(),
+                ping.longitude.toString(),
+                String.format(Locale.US, "%.1f", ping.accuracy),
+                ping.batteryLevel.toString(),
+                dayFormat.format(date),
+                ping.eventType,
+                mapsUrl
+            )
+        }
     }
-    
+
     private val httpTransport = NetHttpTransport()
     private val jsonFactory = GsonFactory.getDefaultInstance()
-    
+
     private fun getCredential(email: String): GoogleAccountCredential {
-        AppLogger.d(TAG, "Creating credential for: $email")
         return GoogleAccountCredential.usingOAuth2(
-            context,
+            context.applicationContext,
             REQUIRED_SCOPES
         ).apply {
             selectedAccountName = email
         }
     }
-    
+
+    private fun withTimeouts(credential: GoogleAccountCredential): HttpRequestInitializer {
+        return HttpRequestInitializer { request ->
+            credential.initialize(request)
+            request.connectTimeout = CONNECT_TIMEOUT_MS
+            request.readTimeout = READ_TIMEOUT_MS
+        }
+    }
+
     private fun getSheetsService(credential: GoogleAccountCredential): Sheets {
-        AppLogger.d(TAG, "Creating Sheets service...")
-        return Sheets.Builder(httpTransport, jsonFactory, credential)
+        return Sheets.Builder(httpTransport, jsonFactory, withTimeouts(credential))
             .setApplicationName(APP_NAME)
             .build()
     }
-    
+
     private fun getDriveService(credential: GoogleAccountCredential): Drive {
-        AppLogger.d(TAG, "Creating Drive service...")
-        return Drive.Builder(httpTransport, jsonFactory, credential)
+        return Drive.Builder(httpTransport, jsonFactory, withTimeouts(credential))
             .setApplicationName(APP_NAME)
             .build()
     }
-    
-    /**
-     * Find existing sheet or create a new one.
-     * Returns the spreadsheet ID.
-     */
+
     suspend fun findOrCreateSheet(): Result<String> = withContext(Dispatchers.IO) {
         AppLogger.i(TAG, "=== findOrCreateSheet started ===")
         try {
             val email = securePrefs.userEmail
-            AppLogger.d(TAG, "User email: ${email ?: "null"}")
-            
-            if (email == null) {
-                AppLogger.e(TAG, "User not signed in - no email found")
-                return@withContext Result.failure(Exception("User not signed in"))
-            }
-            
-            // Check if we already have a spreadsheet ID cached
+                ?: return@withContext Result.failure(Exception("User not signed in"))
+
             val cachedId = securePrefs.spreadsheetId
-            AppLogger.d(TAG, "Cached spreadsheet ID: ${cachedId ?: "none"}")
-            
-            if (cachedId != null) {
-                AppLogger.d(TAG, "Verifying cached spreadsheet...")
+            if (!cachedId.isNullOrBlank()) {
                 if (verifySpreadsheet(cachedId, email)) {
-                    AppLogger.i(TAG, "Cached spreadsheet verified successfully")
+                    AppLogger.i(TAG, "Cached spreadsheet verified: $cachedId")
                     return@withContext Result.success(cachedId)
                 } else {
-                    AppLogger.w(TAG, "Cached spreadsheet no longer valid")
+                    AppLogger.w(TAG, "Cached spreadsheet $cachedId invalid or trashed; re-discovering")
+                    securePrefs.spreadsheetId = null
                 }
             }
-            
+
             val credential = getCredential(email)
             val driveService = getDriveService(credential)
-            
-            // Search for existing sheet in Drive
-            AppLogger.d(TAG, "Searching for existing sheet in Drive...")
+
             val query = "name = '$SHEET_NAME' and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false"
-            AppLogger.d(TAG, "Query: $query")
-            
             val result = driveService.files().list()
                 .setQ(query)
                 .setSpaces("drive")
                 .setFields("files(id, name)")
                 .execute()
-            
-            AppLogger.d(TAG, "Drive search complete. Found ${result.files?.size ?: 0} files")
-            
-            val spreadsheetId = if (result.files != null && result.files.isNotEmpty()) {
-                // Use existing sheet
+
+            val spreadsheetId = if (!result.files.isNullOrEmpty()) {
                 val existingId = result.files[0].id
                 AppLogger.i(TAG, "Found existing sheet: $existingId")
                 existingId
             } else {
-                // Create new sheet
-                AppLogger.i(TAG, "No existing sheet found, creating new one...")
                 createNewSheet(credential)
             }
-            
-            // Cache the ID
+
             securePrefs.spreadsheetId = spreadsheetId
             AppLogger.i(TAG, "=== findOrCreateSheet SUCCESS: $spreadsheetId ===")
             Result.success(spreadsheetId)
-            
         } catch (e: Exception) {
             AppLogger.e(TAG, "=== findOrCreateSheet FAILED ===", e)
             Result.failure(e)
         }
     }
-    
-    private suspend fun verifySpreadsheet(spreadsheetId: String, email: String): Boolean {
-        AppLogger.d(TAG, "Verifying spreadsheet: $spreadsheetId")
+
+    private fun verifySpreadsheet(spreadsheetId: String, email: String): Boolean {
         return try {
             val credential = getCredential(email)
             val sheetsService = getSheetsService(credential)
-            val sheet = sheetsService.spreadsheets().get(spreadsheetId).execute()
+            val sheet = sheetsService.spreadsheets().get(spreadsheetId)
+                .setFields("properties/title")
+                .execute()
             AppLogger.d(TAG, "Spreadsheet verified: ${sheet.properties?.title}")
             true
         } catch (e: Exception) {
@@ -149,118 +175,66 @@ class SheetsRepository(
             false
         }
     }
-    
-    private suspend fun createNewSheet(credential: GoogleAccountCredential): String {
+
+    private fun createNewSheet(credential: GoogleAccountCredential): String {
         AppLogger.i(TAG, "Creating new spreadsheet...")
         val sheetsService = getSheetsService(credential)
-        
+
         val spreadsheet = Spreadsheet().apply {
             properties = SpreadsheetProperties().apply {
                 title = SHEET_NAME
             }
         }
-        
-        AppLogger.d(TAG, "Sending create request...")
+
         val createdSheet = sheetsService.spreadsheets()
             .create(spreadsheet)
             .execute()
-        
-        AppLogger.i(TAG, "Spreadsheet created: ${createdSheet.spreadsheetId}")
-        
-        // Add header row
-        AppLogger.d(TAG, "Adding header row...")
-        val headers = listOf(
-            listOf("Timestamp", "Date", "Time", "Latitude", "Longitude", "Accuracy (m)", "Battery (%)", "Day")
-        )
-        
+
         val headerRange = ValueRange().apply {
-            setValues(headers)
+            setValues(listOf(HEADER_ROW))
         }
-        
+
         sheetsService.spreadsheets().values()
-            .update(createdSheet.spreadsheetId, "Sheet1!A1:H1", headerRange)
+            .update(createdSheet.spreadsheetId, "A1:J1", headerRange)
             .setValueInputOption("RAW")
             .execute()
-        
-        AppLogger.i(TAG, "Header row added successfully")
+
+        AppLogger.i(TAG, "Created new spreadsheet ${createdSheet.spreadsheetId} with headers")
         return createdSheet.spreadsheetId
     }
-    
-    /**
-     * Append location data to the Google Sheet.
-     * Returns the number of rows successfully appended.
-     */
+
     suspend fun appendLocationData(pings: List<LocationPingEntity>): Result<Int> = withContext(Dispatchers.IO) {
-        AppLogger.i(TAG, "=== appendLocationData started (${pings.size} pings) ===")
+        if (pings.isEmpty()) return@withContext Result.success(0)
+
         try {
-            if (pings.isEmpty()) {
-                AppLogger.d(TAG, "No pings to append")
-                return@withContext Result.success(0)
-            }
-            
             val email = securePrefs.userEmail
-            AppLogger.d(TAG, "User email: ${email ?: "null"}")
-            
-            if (email == null) {
-                AppLogger.e(TAG, "User not signed in")
-                return@withContext Result.failure(Exception("User not signed in"))
-            }
-            
+                ?: return@withContext Result.failure(Exception("User not signed in"))
+
             val spreadsheetId = securePrefs.spreadsheetId
-            AppLogger.d(TAG, "Spreadsheet ID: ${spreadsheetId ?: "null"}")
-            
-            if (spreadsheetId == null) {
-                AppLogger.e(TAG, "Spreadsheet not configured")
-                return@withContext Result.failure(Exception("Spreadsheet not configured"))
-            }
-            
+                ?: return@withContext Result.failure(Exception("Spreadsheet not configured"))
+
             val credential = getCredential(email)
             val sheetsService = getSheetsService(credential)
-            
-            // Format data for Sheets
-            val dateFormat = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
-            val timeFormat = SimpleDateFormat("hh:mm:ss a", Locale.getDefault())
-            val dayFormat = SimpleDateFormat("EEEE", Locale.ENGLISH)
-            val timestampFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.getDefault())
-            
-            dateFormat.timeZone = TimeZone.getTimeZone("Asia/Kolkata")
-            timeFormat.timeZone = TimeZone.getTimeZone("Asia/Kolkata")
-            dayFormat.timeZone = TimeZone.getTimeZone("Asia/Kolkata")
-            timestampFormat.timeZone = TimeZone.getTimeZone("Asia/Kolkata")
-            
-            val rows = pings.map { ping ->
-                val date = Date(ping.timestamp)
-                listOf(
-                    timestampFormat.format(date),
-                    dateFormat.format(date),
-                    timeFormat.format(date),
-                    ping.latitude.toString(),
-                    ping.longitude.toString(),
-                    String.format("%.1f", ping.accuracy),
-                    ping.batteryLevel.toString(),
-                    dayFormat.format(date)
-                )
-            }
-            
-            AppLogger.d(TAG, "Formatted ${rows.size} rows for append")
-            
+
+            val rows = pings.map { formatPingRow(it) }
             val valueRange = ValueRange().apply {
                 setValues(rows)
             }
-            
-            AppLogger.d(TAG, "Sending append request...")
+
             val response = sheetsService.spreadsheets().values()
                 .append(spreadsheetId, SHEET_RANGE, valueRange)
                 .setValueInputOption("RAW")
                 .setInsertDataOption("INSERT_ROWS")
                 .execute()
-            
+
             val updatedRows = response.updates?.updatedRows ?: pings.size
-            AppLogger.i(TAG, "=== appendLocationData SUCCESS: $updatedRows rows ===")
+            AppLogger.i(TAG, "appendLocationData SUCCESS: $updatedRows rows")
             Result.success(updatedRows)
-            
+        } catch (e: GoogleJsonResponseException) {
+            AppLogger.e(TAG, "Google Sheets API error (${e.statusCode}): ${e.details?.message}", e)
+            Result.failure(e)
         } catch (e: Exception) {
-            AppLogger.e(TAG, "=== appendLocationData FAILED ===", e)
+            AppLogger.e(TAG, "appendLocationData FAILED", e)
             Result.failure(e)
         }
     }

@@ -8,10 +8,13 @@ on:
     branches:
       - main
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,14 +30,23 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Create Gradle Wrapper
-        run: |
-          gradle wrapper --gradle-version 8.7
+        run: gradle wrapper --gradle-version 8.10
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      - name: Run Unit Tests
+        run: ./gradlew testDebugUnitTest
+
       - name: Build Debug APK
         run: ./gradlew assembleDebug
+
+      - name: Print Debug Keystore SHA-1
+        run: |
+          if [ -f ~/.android/debug.keystore ]; then
+            echo "### Debug Keystore SHA-1" >> $GITHUB_STEP_SUMMARY
+            keytool -keystore ~/.android/debug.keystore -list -v -storepass android | grep -E "SHA1|SHA256" >> $GITHUB_STEP_SUMMARY || true
+          fi
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
@@ -46,7 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: build
-    
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -62,35 +74,47 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Create Gradle Wrapper
-        run: |
-          gradle wrapper --gradle-version 8.7
+        run: gradle wrapper --gradle-version 8.10
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Generate Signing Keystore
+      - name: Prepare Signing Keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          keytool -genkey -v \
-            -keystore release.keystore \
-            -storepass android123 \
-            -alias release \
-            -keypass android123 \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "CN=Antigravity,OU=Location,O=Antigravity,L=Mumbai,ST=Maharashtra,C=IN"
-          
-          # Print the SHA-1 for OAuth client configuration
-          echo "=== KEYSTORE SHA-1 (Update this in Google Cloud Console) ==="
-          keytool -keystore release.keystore -list -v -storepass android123 | grep SHA1
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > release.keystore
+            echo "STORE_PASS=$KEYSTORE_PASSWORD" >> $GITHUB_ENV
+            echo "KEY_ALIAS=$KEY_ALIAS" >> $GITHUB_ENV
+            echo "KEY_PASS=$KEY_PASSWORD" >> $GITHUB_ENV
+          else
+            keytool -genkey -v \
+              -keystore release.keystore \
+              -storepass android123 \
+              -alias release \
+              -keypass android123 \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Antigravity,OU=Location,O=Antigravity,L=Mumbai,ST=Maharashtra,C=IN"
+            echo "STORE_PASS=android123" >> $GITHUB_ENV
+            echo "KEY_ALIAS=release" >> $GITHUB_ENV
+            echo "KEY_PASS=android123" >> $GITHUB_ENV
+          fi
+          echo "### Release Keystore SHA-1 (Register in Google Cloud Console OAuth)" >> $GITHUB_STEP_SUMMARY
+          keytool -keystore release.keystore -list -v -storepass "$STORE_PASS" | grep -E "SHA1|SHA256" | tee -a $GITHUB_STEP_SUMMARY
 
       - name: Build Signed Release APK
         run: |
           ./gradlew assembleRelease \
             -Pandroid.injected.signing.store.file=$(pwd)/release.keystore \
-            -Pandroid.injected.signing.store.password=android123 \
-            -Pandroid.injected.signing.key.alias=release \
-            -Pandroid.injected.signing.key.password=android123
+            -Pandroid.injected.signing.store.password="$STORE_PASS" \
+            -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+            -Pandroid.injected.signing.key.password="$KEY_PASS"
 
       - name: Upload Signed Release APK
         uses: actions/upload-artifact@v4
@@ -98,3 +122,23 @@ jobs:
           name: app-release-signed
           path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: warn
+
+      - name: Download Debug APK for Release
+        uses: actions/download-artifact@v4
+        with:
+          name: app-debug
+          path: debug-apk
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: wya Location Tracker (Latest Build)
+          body: |
+            Automated build from commit `${{ github.sha }}`.
+            - Default interval: **4 hours** (Doze-proof AlarmManager + WorkManager watchdog)
+            - Includes offline Room queue, NetworkCallback auto-flush, SOS fresh ping, and Device Owner anti-theft support.
+          make_latest: true
+          files: |
+            app/build/outputs/apk/release/app-release.apk
+            debug-apk/app-debug.apk
