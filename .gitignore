@@ -63,3 +63,4 @@ coverage/
 # Secrets
 secrets.properties
 google-services.json
+.env

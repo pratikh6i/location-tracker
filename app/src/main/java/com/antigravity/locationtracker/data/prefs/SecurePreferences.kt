@@ -15,31 +15,38 @@ class SecurePreferences private constructor(context: Context) {
         private const val PREFS_NAME = "antigravity_secure_prefs"
 
         // Keys
-        private const val KEY_ACCESS_TOKEN = "access_token"
-        private const val KEY_REFRESH_TOKEN = "refresh_token"
-        private const val KEY_TOKEN_EXPIRY = "token_expiry"
-        private const val KEY_SPREADSHEET_ID = "spreadsheet_id"
-        private const val KEY_USER_EMAIL = "user_email"
-        private const val KEY_USER_NAME = "user_name"
-        private const val KEY_SETUP_COMPLETE = "setup_complete"
-        private const val KEY_SERVICE_ENABLED = "service_enabled"
-        private const val KEY_LAST_LOCATION_TIME = "last_location_time"
-        private const val KEY_LAST_PING_ATTEMPT_TIME = "last_ping_attempt_time"
-        private const val KEY_LAST_SYNC_ERROR = "last_sync_error"
-        private const val KEY_TRACKING_INTERVAL = "tracking_interval_minutes"
+        private const val KEY_ACCESS_TOKEN              = "access_token"
+        private const val KEY_REFRESH_TOKEN             = "refresh_token"
+        private const val KEY_TOKEN_EXPIRY              = "token_expiry"
+        private const val KEY_SPREADSHEET_ID            = "spreadsheet_id"
+        private const val KEY_USER_EMAIL                = "user_email"
+        private const val KEY_USER_NAME                 = "user_name"
+        private const val KEY_SETUP_COMPLETE            = "setup_complete"
+        private const val KEY_SERVICE_ENABLED           = "service_enabled"
+        private const val KEY_LAST_LOCATION_TIME        = "last_location_time"
+        private const val KEY_LAST_PING_ATTEMPT_TIME    = "last_ping_attempt_time"
+        private const val KEY_LAST_SYNC_ERROR           = "last_sync_error"
+        private const val KEY_TRACKING_INTERVAL         = "tracking_interval_minutes"
         private const val KEY_TRACKING_INTERVAL_SECONDS = "tracking_interval_seconds"
-        private const val KEY_LAST_LATITUDE = "last_latitude"
-        private const val KEY_LAST_LONGITUDE = "last_longitude"
-        private const val KEY_DEV_MODE = "dev_mode"
+        private const val KEY_LAST_LATITUDE             = "last_latitude"
+        private const val KEY_LAST_LONGITUDE            = "last_longitude"
+        private const val KEY_DEV_MODE                  = "dev_mode"
 
-        // Default tracking interval: 4 hours (240 minutes) for reliable anti-theft tracking
+        // Connectivity & state-restore
+        private const val KEY_STATE_RESTORE_ENABLED     = "state_restore_enabled"
+        private const val KEY_LOCK_AFTER_SYNC           = "lock_after_sync"
+
+        // SMS fallback
+        private const val KEY_SMS_PHONE1                = "sms_phone1"
+        private const val KEY_SMS_PHONE2                = "sms_phone2"
+        private const val KEY_LAST_SMS_SENT_TIME        = "last_sms_sent_time"
+        private const val KEY_LAST_SHEET_SYNC_TIME      = "last_sheet_sync_time"
+
+        // Default tracking interval: 4 hours (240 minutes)
         const val DEFAULT_INTERVAL_MINUTES = 240
 
-        // Preset intervals in minutes (normal mode)
         val PRESET_INTERVALS_MINUTES = listOf(5, 15, 30, 60, 120, 240)
-
-        // Dev mode intervals in seconds
-        val DEV_INTERVALS_SECONDS = listOf(1, 5, 10, 30)
+        val DEV_INTERVALS_SECONDS    = listOf(1, 5, 10, 30)
 
         @Volatile
         private var INSTANCE: SecurePreferences? = null
@@ -50,13 +57,11 @@ class SecurePreferences private constructor(context: Context) {
             }
         }
 
-        fun formatInterval(minutes: Int): String {
-            return when {
-                minutes < 60 -> "$minutes min"
-                minutes == 60 -> "1 hour"
-                minutes % 60 == 0 -> "${minutes / 60} hours"
-                else -> "$minutes min"
-            }
+        fun formatInterval(minutes: Int): String = when {
+            minutes < 60      -> "$minutes min"
+            minutes == 60     -> "1 hour"
+            minutes % 60 == 0 -> "${minutes / 60} hours"
+            else              -> "$minutes min"
         }
     }
 
@@ -87,7 +92,7 @@ class SecurePreferences private constructor(context: Context) {
         set(value) = prefs.edit().putLong(KEY_TOKEN_EXPIRY, value).apply()
 
     fun isTokenValid(): Boolean {
-        val token = accessToken
+        val token  = accessToken
         val expiry = tokenExpiry
         return token != null && expiry > System.currentTimeMillis()
     }
@@ -151,12 +156,10 @@ class SecurePreferences private constructor(context: Context) {
         get() = prefs.getInt(KEY_TRACKING_INTERVAL_SECONDS, 30)
         set(value) = prefs.edit().putInt(KEY_TRACKING_INTERVAL_SECONDS, value.coerceIn(1, 60)).apply()
 
-    fun getIntervalMillis(): Long {
-        return if (isDevMode) {
-            trackingIntervalSeconds * 1000L
-        } else {
-            trackingIntervalMinutes * 60 * 1000L
-        }
+    fun getIntervalMillis(): Long = if (isDevMode) {
+        trackingIntervalSeconds * 1_000L
+    } else {
+        trackingIntervalMinutes * 60 * 1_000L
     }
 
     var lastLatitude: Double
@@ -169,15 +172,45 @@ class SecurePreferences private constructor(context: Context) {
 
     fun formatInterval(minutes: Int): String = Companion.formatInterval(minutes)
 
-    fun formatIntervalDisplay(): String {
-        return if (isDevMode) {
-            "${trackingIntervalSeconds}s (Dev)"
-        } else {
-            formatInterval(trackingIntervalMinutes)
-        }
+    fun formatIntervalDisplay(): String = if (isDevMode) {
+        "${trackingIntervalSeconds}s (Dev)"
+    } else {
+        formatInterval(trackingIntervalMinutes)
     }
 
-    // ========== Clear All ==========
+    // ========== Connectivity State-Restore ==========
+
+    /** When true, app reverts location/WiFi to original state after each sync. */
+    var stateRestoreEnabled: Boolean
+        get() = prefs.getBoolean(KEY_STATE_RESTORE_ENABLED, true)
+        set(value) = prefs.edit().putBoolean(KEY_STATE_RESTORE_ENABLED, value).apply()
+
+    /** When true and Device Admin active, locks screen immediately after a successful sync. */
+    var lockAfterSync: Boolean
+        get() = prefs.getBoolean(KEY_LOCK_AFTER_SYNC, false)
+        set(value) = prefs.edit().putBoolean(KEY_LOCK_AFTER_SYNC, value).apply()
+
+    // ========== SMS Fallback ==========
+
+    var smsPhone1: String?
+        get() = prefs.getString(KEY_SMS_PHONE1, null)
+        set(value) = prefs.edit().putString(KEY_SMS_PHONE1, value).apply()
+
+    var smsPhone2: String?
+        get() = prefs.getString(KEY_SMS_PHONE2, null)
+        set(value) = prefs.edit().putString(KEY_SMS_PHONE2, value).apply()
+
+    /** Epoch-ms of last SMS sent; 0 = never. */
+    var lastSmsSentTime: Long
+        get() = prefs.getLong(KEY_LAST_SMS_SENT_TIME, 0)
+        set(value) = prefs.edit().putLong(KEY_LAST_SMS_SENT_TIME, value).apply()
+
+    /** Epoch-ms of last successful Sheets row append; 0 = never. */
+    var lastSheetSyncTime: Long
+        get() = prefs.getLong(KEY_LAST_SHEET_SYNC_TIME, 0)
+        set(value) = prefs.edit().putLong(KEY_LAST_SHEET_SYNC_TIME, value).apply()
+
+    // ========== Clear ==========
 
     fun clearAll() {
         prefs.edit().clear().apply()

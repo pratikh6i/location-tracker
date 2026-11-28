@@ -2,36 +2,43 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Location Permissions -->
+    <!-- Location -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
 
-    <!-- Foreground Service Permissions -->
+    <!-- Foreground Service -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
-    <!-- Network Permissions -->
+    <!-- Network -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
 
-    <!-- Background Execution & Doze Alarms -->
+    <!-- Background execution and Doze alarms -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
-    <!-- Optional privileged permission (grantable via ADB) to auto-enable location -->
-    <uses-permission
-        android:name="android.permission.WRITE_SECURE_SETTINGS"
-        tools:ignore="ProtectedPermissions" />
+    <!-- SMS fallback (dangerous - requested at runtime) -->
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
     <!-- Notifications (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- Hardware features -->
+    <!-- Device Owner / privileged (grantable via ADB) -->
+    <uses-permission
+        android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+
+    <!-- Hardware -->
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
 
     <application
         android:name=".AntigravityApp"
@@ -45,7 +52,6 @@
         android:theme="@style/Theme.AntigravityLocationTracker"
         tools:targetApi="34">
 
-        <!-- Main Activity -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -56,14 +62,12 @@
             </intent-filter>
         </activity>
 
-        <!-- Location Foreground Service -->
         <service
             android:name=".location.LocationForegroundService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="location" />
 
-        <!-- Boot & Update Receiver -->
         <receiver
             android:name=".receiver.BootReceiver"
             android:enabled="true"
@@ -78,13 +82,12 @@
             </intent-filter>
         </receiver>
 
-        <!-- Doze-safe 4-hour Alarm Receiver -->
         <receiver
             android:name=".receiver.TrackingAlarmReceiver"
             android:enabled="true"
             android:exported="false" />
 
-        <!-- Device Admin / Device Owner Receiver for Anti-Theft Protection -->
+        <!-- Device Admin / Device Owner receiver for anti-theft -->
         <receiver
             android:name=".admin.TrackerDeviceAdminReceiver"
             android:exported="true"
@@ -97,7 +100,7 @@
             </intent-filter>
         </receiver>
 
-        <!-- WorkManager Initialization - Remove default initializer for on-demand init -->
+        <!-- WorkManager on-demand init -->
         <provider
             android:name="androidx.startup.InitializationProvider"
             android:authorities="${applicationId}.androidx-startup"
@@ -109,7 +112,7 @@
                 tools:node="remove" />
         </provider>
 
-        <!-- FileProvider for sharing log files -->
+        <!-- FileProvider for log sharing -->
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

@@ -57,6 +57,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.ui.text.input.KeyboardType
 import com.antigravity.locationtracker.data.prefs.SecurePreferences
 import com.antigravity.locationtracker.ui.theme.AppTypography
 import com.antigravity.locationtracker.ui.theme.DeepCharcoal
@@ -299,6 +307,11 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
+            // ── SMS Fallback & State Restore ─────────────────────────────────────────
+            SmsAndRestoreSection(context = context)
+
+            Spacer(modifier = Modifier.height(16.dp))
+
             // Sign Out
             Card(
                 modifier = Modifier
@@ -471,6 +484,153 @@ private fun SettingsItem(
         }
     }
 }
+
+// ── SMS Fallback + State Restore card (self-contained, reads/writes prefs directly) ──
+
+@Composable
+private fun SmsAndRestoreSection(context: Context) {
+    val prefs = remember { SecurePreferences.getInstance(context) }
+
+    var phone1          by remember { mutableStateOf(prefs.smsPhone1 ?: "") }
+    var phone2          by remember { mutableStateOf(prefs.smsPhone2 ?: "") }
+    var stateRestore    by remember { mutableStateOf(prefs.stateRestoreEnabled) }
+    var lockAfterSync   by remember { mutableStateOf(prefs.lockAfterSync) }
+    var smsGranted      by remember {
+        mutableStateOf(
+            context.checkSelfPermission(Manifest.permission.SEND_SMS) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    val smsPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> smsGranted = granted }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = SoftWhite)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                "📱 SMS Fallback",
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 15.sp,
+                color = DeepCharcoal
+            )
+            Text(
+                "If location isn't uploaded for 24 h, sends last known location via SMS.",
+                style = AppTypography.labelSmall,
+                color = WarmGray,
+                modifier = Modifier.padding(top = 2.dp, bottom = 12.dp)
+            )
+
+            if (!smsGranted) {
+                Button(
+                    onClick = { smsPermLauncher.launch(Manifest.permission.SEND_SMS) },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800)),
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Grant SMS Permission", color = Color.White) }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
+            OutlinedTextField(
+                value = phone1,
+                onValueChange = { phone1 = it },
+                label = { Text("Emergency Number 1") },
+                placeholder = { Text("+91xxxxxxxxxx") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor   = MintGreen,
+                    unfocusedBorderColor = WarmGray
+                )
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedTextField(
+                value = phone2,
+                onValueChange = { phone2 = it },
+                label = { Text("Emergency Number 2 (optional)") },
+                placeholder = { Text("+91xxxxxxxxxx") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor   = MintGreen,
+                    unfocusedBorderColor = WarmGray
+                )
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Button(
+                onClick = {
+                    prefs.smsPhone1 = phone1.trim().ifBlank { null }
+                    prefs.smsPhone2 = phone2.trim().ifBlank { null }
+                    if (!smsGranted) {
+                        smsPermLauncher.launch(Manifest.permission.SEND_SMS)
+                    } else {
+                        Toast.makeText(context, "SMS numbers saved", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = MintGreen)
+            ) { Text("Save SMS Numbers", color = DeepCharcoal, fontWeight = FontWeight.SemiBold) }
+
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                "🔄 Auto State Restore",
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 15.sp,
+                color = DeepCharcoal
+            )
+            Text(
+                "Reverts location / WiFi to their previous state after each sync cycle.",
+                style = AppTypography.labelSmall,
+                color = WarmGray,
+                modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Enable state restore", color = DeepCharcoal)
+                Switch(
+                    checked = stateRestore,
+                    onCheckedChange = { stateRestore = it; prefs.stateRestoreEnabled = it },
+                    colors = SwitchDefaults.colors(checkedThumbColor = MintGreen)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Lock screen after sync", color = DeepCharcoal)
+                    Text(
+                        "Requires Device Admin via ADB",
+                        style = AppTypography.labelSmall,
+                        color = WarmGray
+                    )
+                }
+                Switch(
+                    checked = lockAfterSync,
+                    onCheckedChange = { lockAfterSync = it; prefs.lockAfterSync = it },
+                    colors = SwitchDefaults.colors(checkedThumbColor = MintGreen)
+                )
+            }
+        }
+    }
+}
+
+// ── Frequency dialog ────────────────────────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
