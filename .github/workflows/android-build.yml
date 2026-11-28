@@ -37,10 +37,32 @@ jobs:
         run: chmod +x gradlew
 
       - name: Run Unit Tests
-        run: ./gradlew testDebugUnitTest
+        run: |
+          set -o pipefail
+          ./gradlew testDebugUnitTest --console=plain 2>&1 | tee -a build-output.log
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug
+        run: |
+          set -o pipefail
+          ./gradlew assembleDebug --console=plain 2>&1 | tee -a build-output.log
+
+      - name: Publish build errors on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo '### Build failure output' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -E "^e: |error:|FAILED|Unresolved|Compilation error" build-output.log | head -100 >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          # Commit a trimmed error log to main so it is readable via the contents API
+          grep -E "^e: |^w: |error:|FAILED|Unresolved|Compilation error" build-output.log | head -200 > ci-error.log || true
+          tail -n 60 build-output.log >> ci-error.log || true
+          git config user.name  "ci-bot"
+          git config user.email "ci-bot@users.noreply.github.com"
+          git add -f ci-error.log
+          git commit -m "ci: build error log [skip ci]" || exit 0
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main || true
 
       - name: Print Debug Keystore SHA-1
         run: |

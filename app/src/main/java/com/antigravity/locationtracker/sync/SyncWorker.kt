@@ -3,11 +3,9 @@ package com.antigravity.locationtracker.sync
 import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
-import com.antigravity.locationtracker.data.db.AppDatabase
 import com.antigravity.locationtracker.data.prefs.SecurePreferences
 import com.antigravity.locationtracker.location.LocationHelper
 import com.antigravity.locationtracker.util.AppLogger
-import com.antigravity.locationtracker.util.SmsFallbackManager
 
 /**
  * WorkManager watchdog and offline-flush worker.
