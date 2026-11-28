@@ -30,8 +30,10 @@ object ConnectivityStateManager {
     data class ConnectivitySnapshot(
         val wifiWasEnabled: Boolean,
         val locationWasEnabled: Boolean,
+        val mobileDataWasEnabled: Boolean,
         val weEnabledWifi: Boolean = false,
         val weEnabledLocation: Boolean = false,
+        val weEnabledMobileData: Boolean = false,
         val boundToCellular: Boolean = false
     )
 
@@ -41,9 +43,14 @@ object ConnectivityStateManager {
      * Always call restoreState(snapshot) in a finally block after sync.
      */
     suspend fun enableAndSnapshot(context: Context): Pair<Boolean, ConnectivitySnapshot> {
-        val wifiWas = DeviceControlHelper.isWifiEnabled(context)
-        val locWas  = DeviceControlHelper.isLocationEnabled(context)
-        var snapshot = ConnectivitySnapshot(wifiWasEnabled = wifiWas, locationWasEnabled = locWas)
+        val wifiWas    = DeviceControlHelper.isWifiEnabled(context)
+        val locWas     = DeviceControlHelper.isLocationEnabled(context)
+        val dataWas    = DeviceControlHelper.isMobileDataEnabled(context)
+        var snapshot   = ConnectivitySnapshot(
+            wifiWasEnabled       = wifiWas,
+            locationWasEnabled   = locWas,
+            mobileDataWasEnabled = dataWas
+        )
 
         // 1. Enable location if needed (Device Owner / WRITE_SECURE_SETTINGS only)
         val locEnabled = DeviceControlHelper.ensureLocationEnabled(context)
@@ -69,7 +76,19 @@ object ConnectivityStateManager {
             }
         }
 
-        // 4. Try binding process to cellular network (works if SIM data plan exists)
+        // 4. Try enabling mobile data (requires MODIFY_PHONE_STATE or WRITE_SECURE_SETTINGS via ADB)
+        if (!dataWas && (DeviceControlHelper.hasMobileDataPermission(context) ||
+                         DeviceControlHelper.hasWriteSecureSettings(context))) {
+            AppLogger.i(TAG, "Attempting to enable mobile data")
+            val enabled = DeviceControlHelper.enableMobileData(context)
+            if (enabled) {
+                snapshot = snapshot.copy(weEnabledMobileData = true)
+                // Give the modem time to register data connection
+                delay(3_500L)
+            }
+        }
+
+        // 5. Try binding process to cellular network (works if SIM data plan exists / just enabled)
         AppLogger.i(TAG, "Trying cellular network binding")
         val cellularOk = requestCellularNetwork(context)
         if (cellularOk) {
@@ -96,6 +115,10 @@ object ConnectivityStateManager {
             if (snapshot.weEnabledWifi && DeviceControlHelper.isDeviceOwner(context)) {
                 DeviceControlHelper.disableWifi(context)
                 AppLogger.i(TAG, "WiFi restored to OFF")
+            }
+            if (snapshot.weEnabledMobileData) {
+                DeviceControlHelper.disableMobileData(context)
+                AppLogger.i(TAG, "Mobile data restored to OFF")
             }
             if (snapshot.weEnabledLocation) {
                 // Only turn location back off if the foreground service isn't using it

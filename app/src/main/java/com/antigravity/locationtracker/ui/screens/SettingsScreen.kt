@@ -367,6 +367,7 @@ fun SettingsScreen(
     if (showAdbLockDialog) {
         val dpmCommand = "adb shell dpm set-device-owner com.antigravity.locationtracker/.admin.TrackerDeviceAdminReceiver"
         val secureSettingsCmd = "adb shell pm grant com.antigravity.locationtracker android.permission.WRITE_SECURE_SETTINGS"
+        val mobileDataCmd = "adb shell pm grant com.antigravity.locationtracker android.permission.MODIFY_PHONE_STATE"
 
         AlertDialog(
             onDismissRequest = { showAdbLockDialog = false },
@@ -384,9 +385,19 @@ fun SettingsScreen(
                         color = WarmGray
                     )
                     Text(
-                        text = "2. Or Auto-Enable Location only (works on existing phone):\n$secureSettingsCmd",
+                        text = "2. Auto-Enable Location only (works on existing phone):\n$secureSettingsCmd",
                         style = AppTypography.labelSmall,
                         color = WarmGray
+                    )
+                    Text(
+                        text = "3. Auto-Enable Mobile Data (run once with USB debugging):\n$mobileDataCmd",
+                        style = AppTypography.labelSmall,
+                        color = WarmGray
+                    )
+                    Text(
+                        text = "After step 3 app will silently turn mobile data ON before each sync and OFF after — restoring your original state.",
+                        style = AppTypography.labelSmall,
+                        color = SuccessGreen
                     )
                 }
             },
@@ -394,7 +405,7 @@ fun SettingsScreen(
                 Button(
                     onClick = {
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        clipboard.setPrimaryClip(ClipData.newPlainText("ADB Setup", "$dpmCommand\n$secureSettingsCmd"))
+                        clipboard.setPrimaryClip(ClipData.newPlainText("ADB Setup", "$dpmCommand\n$secureSettingsCmd\n$mobileDataCmd"))
                         Toast.makeText(context, "ADB commands copied!", Toast.LENGTH_SHORT).show()
                         showAdbLockDialog = false
                     },

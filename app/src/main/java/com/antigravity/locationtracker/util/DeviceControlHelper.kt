@@ -215,15 +215,76 @@ object DeviceControlHelper {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             tm.isDataEnabled
         } else {
-            @Suppress("DEPRECATION")
             Settings.Global.getInt(context.contentResolver, "mobile_data", 1) == 1
         }
     } catch (_: SecurityException) {
-        try {
-            @Suppress("DEPRECATION")
-            Settings.Global.getInt(context.contentResolver, "mobile_data", 1) == 1
-        } catch (_: Exception) { false }
+        try { Settings.Global.getInt(context.contentResolver, "mobile_data", 1) == 1 }
+        catch (_: Exception) { false }
     } catch (_: Exception) { false }
+
+    fun hasMobileDataPermission(context: Context): Boolean =
+        ContextCompat.checkSelfPermission(
+            context, Manifest.permission.MODIFY_PHONE_STATE
+        ) == PackageManager.PERMISSION_GRANTED
+
+    /**
+     * Enables mobile data.
+     * Requires MODIFY_PHONE_STATE granted via:
+     *   adb shell pm grant com.antigravity.locationtracker android.permission.MODIFY_PHONE_STATE
+     *
+     * Strategy:
+     * 1. TelephonyManager.setDataEnabled() via reflection (needs MODIFY_PHONE_STATE)
+     * 2. Settings.Global "mobile_data" write as fallback (needs WRITE_SECURE_SETTINGS)
+     */
+    fun enableMobileData(context: Context): Boolean {
+        if (!hasMobileDataPermission(context) && !hasWriteSecureSettings(context)) {
+            AppLogger.w(TAG, "No permission for mobile data toggle (need MODIFY_PHONE_STATE or WRITE_SECURE_SETTINGS)")
+            return false
+        }
+        return setMobileDataEnabled(context, true)
+    }
+
+    /**
+     * Disables mobile data. Only called if WE enabled it in this sync cycle.
+     */
+    fun disableMobileData(context: Context): Boolean {
+        if (!hasMobileDataPermission(context) && !hasWriteSecureSettings(context)) return false
+        return setMobileDataEnabled(context, false)
+    }
+
+    private fun setMobileDataEnabled(context: Context, enable: Boolean): Boolean {
+        val action = if (enable) "enable" else "disable"
+
+        // 1. TelephonyManager reflection (MODIFY_PHONE_STATE)
+        if (hasMobileDataPermission(context)) {
+            try {
+                val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+                val method = TelephonyManager::class.java
+                    .getDeclaredMethod("setDataEnabled", Boolean::class.javaPrimitiveType)
+                method.isAccessible = true
+                method.invoke(tm, enable)
+                AppLogger.i(TAG, "Mobile data ${action}d via TelephonyManager reflection")
+                return true
+            } catch (e: Exception) {
+                AppLogger.w(TAG, "TelephonyManager.setDataEnabled reflection failed — trying Settings.Global", e)
+            }
+        }
+
+        // 2. Settings.Global fallback (WRITE_SECURE_SETTINGS)
+        if (hasWriteSecureSettings(context)) {
+            return try {
+                Settings.Global.putInt(context.contentResolver, "mobile_data", if (enable) 1 else 0)
+                AppLogger.i(TAG, "Mobile data ${action}d via Settings.Global")
+                true
+            } catch (e: Exception) {
+                AppLogger.e(TAG, "Settings.Global mobile_data write failed", e)
+                false
+            }
+        }
+
+        AppLogger.e(TAG, "Could not $action mobile data: no usable permission")
+        return false
+    }
 
     fun isInternetAvailable(context: Context): Boolean = try {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
